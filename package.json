@@ -1,0 +1,24 @@
+{
+  "name": "thm_ts_0.1.0",
+  "version": "1.0.0",
+  "description": "this is a mini but pwoerfull programing language",
+  "keywords": [
+    "programing",
+    "language"
+  ],
+  "homepage": "https://github.com/sbk-developers/THM_TS#readme",
+  "bugs": {
+    "url": "https://github.com/sbk-developers/THM_TS/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sbk-developers/THM_TS.git"
+  },
+  "license": "MIT",
+  "author": "sbk developers (sobuj)",
+  "type": "module",
+  "main": "thm/thm.ts",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  }
+}

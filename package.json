@@ -1,0 +1,21 @@
+{
+  "name": "thm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "scriptc build main.ts -o build/thm",
+    "test": "scriptc run tests/run.ts",
+    "thm": "npm run build && ./build/thm"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "scriptc": "0.4.8"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "allowScripts": {
+    "scriptc@0.4.8": true
+  }
+}

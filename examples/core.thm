@@ -1,0 +1,24 @@
+def counter() {
+    value = 0
+
+    def increment() {
+        nonlocal value
+        value += 1
+        return value
+    }
+
+    return increment
+}
+
+count = counter()
+write(count())
+write(count())
+
+items = [0, 1, 2, 3, 4]
+write(items[::-1])
+
+def twice(value: int) -> int {
+    return value * 2
+}
+
+write(list(map(twice, range(1, 4))))

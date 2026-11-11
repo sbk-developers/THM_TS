@@ -1,0 +1,7 @@
+user = {
+    "name": "Sobuj",
+    "age": 20
+}
+
+write(user.name)
+write(user["name"])

@@ -1,0 +1,5 @@
+def identity[T](value: T) -> T {
+    return value
+}
+
+write(identity[int](100))

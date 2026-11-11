@@ -1,0 +1,14 @@
+
+import os
+
+
+
+
+# source = os.system("cat main.ts")
+
+write(os.platform())
+write(os.arch())
+write(os.version())
+write(os.cpus())
+
+

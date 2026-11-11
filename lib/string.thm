@@ -1,0 +1,11 @@
+
+
+
+def Upper(s:str) -> str {
+
+    return s.upper()
+}
+
+def Lower(s:str) -> str {
+    return s.lower()
+}

@@ -1,0 +1,6 @@
+
+
+
+def server(){
+    write("Server runing...")
+}

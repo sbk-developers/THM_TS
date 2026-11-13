@@ -14,6 +14,7 @@ export type Expr =
   | { kind: "conditional"; whenTrue: Expr; condition: Expr; whenFalse: Expr; line: number; column: number }
   | { kind: "lambda"; parameters: Parameter[]; body: Expr; line: number; column: number }
   | { kind: "await"; value: Expr; line: number; column: number }
+  | { kind: "yield"; value?: Expr; line: number; column: number }
   | { kind: "call"; callee: Expr; args: CallArgument[]; line: number; column: number }
   | { kind: "attribute"; receiver: Expr; name: string; line: number; column: number }
   | { kind: "index"; receiver: Expr; index: Expr; line: number; column: number }

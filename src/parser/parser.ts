@@ -124,7 +124,7 @@ export class Parser {
     this.consume(")", "Expected ')' after parameters");
     let returnAnnotation: string | undefined;
     if (this.match("->")) returnAnnotation = this.parseAnnotation(new Set(["{"]));
-    const body = this.parseBlock();
+    const body = this.parseBlock(`function '${name.value}'`);
     this.validateParameters(parameters, name);
     return {
       kind: "function",
@@ -169,7 +169,7 @@ export class Parser {
       bases,
       metaclass,
       decorators,
-      body: this.parseBlock(),
+      body: this.parseBlock(`class '${name.value}'`),
       line: start.line,
       column: start.column,
     };
@@ -304,7 +304,14 @@ export class Parser {
     return parts.join(" ");
   }
 
-  private parseBlock(): Statement[] {
+  private parseBlock(context: string): Statement[] {
+    this.skipNewlines();
+    if (!this.check("{")) {
+      const token = this.peek();
+      throw this.error(
+        `Expected an indented block after ${context} (found '{' expected, got '${token.value}' at ${token.line}:${token.column})`,
+      );
+    }
     this.consume("{", "Expected '{' to begin block");
     const statements: Statement[] = [];
     this.skipNewlines();
@@ -575,7 +582,18 @@ export class Parser {
         return { kind: "unary", operator: "not", operand, line: token.line, column: token.column };
       }
       if (token.value === "yield") {
-        throw new SyntaxError(`${token.value} expressions are not supported`, token);
+        if (
+          this.checkKind("newline") ||
+          this.check("}") ||
+          this.check(")") ||
+          this.check("]") ||
+          this.check(",") ||
+          this.check(":") ||
+          this.checkKind("eof")
+        ) {
+          return { kind: "yield", line: token.line, column: token.column };
+        }
+        return { kind: "yield", value: this.parseExpression(), line: token.line, column: token.column };
       }
       if (token.value === "await") {
         const operand = this.parseExpression(3);

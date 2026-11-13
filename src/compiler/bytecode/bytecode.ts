@@ -50,14 +50,15 @@ export type Opcode =
   | "DEL_NAME"
   | "DEL_ITEM"
   | "DEL_SLICE"
-  | "SET_SLICE";
+  | "SET_SLICE"
+  | "YIELD";
 
 const opcodes: Opcode[] = [
   "CONST", "LOAD", "STORE", "POP", "DUP", "DUP2", "SWAP", "ROT3", "UNARY", "BINARY",
   "COMPARE", "COMPARE_CHAIN", "COMPARE_JUMP", "BUILD_LIST", "BUILD_TUPLE", "BUILD_SET", "BUILD_DICT", "LIST_APPEND", "SET_ADD", "DICT_SET", "BUILD_STRING",
   "UNPACK_SEQUENCE", "GET_ATTR", "SET_ATTR", "DEL_ATTR", "GET_ITEM", "SET_ITEM", "GET_SLICE", "JUMP",
   "JUMP_IF_FALSE", "JUMP_IF_TRUE", "ITER", "ITER_NEXT", "MAKE_FUNCTION", "MAKE_CLASS", "CALL", "AWAIT", "RETURN", "HALT", "IMPORT",
-  "RAISE", "EXC_MATCH", "DEL_NAME", "DEL_ITEM", "DEL_SLICE", "SET_SLICE",
+  "RAISE", "EXC_MATCH", "DEL_NAME", "DEL_ITEM", "DEL_SLICE", "SET_SLICE", "YIELD",
 ];
 const opcodeSet = new Set<Opcode>(opcodes);
 
@@ -170,6 +171,8 @@ export function getStackEffect(instruction: Instruction): number {
       return 0;
     case "RETURN":
       return -1;
+    case "YIELD":
+      return 0;
     case "RAISE":
       return instruction.a === 1 ? -1 : 0;
   }

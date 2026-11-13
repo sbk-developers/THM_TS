@@ -39,6 +39,7 @@ import {
   makeIterator,
   makeList,
   makeNative,
+  makeNone,
   ModuleValue,
   makeRange,
   makeSet,
@@ -71,7 +72,7 @@ interface Frame {
   stackBase: number;
   environment: Environment;
   module?: ModuleValue;
-  capture?: { complete: boolean; value: Value; environment?: Environment };
+  capture?: { complete: boolean; value: Value | null; environment?: Environment };
   ownerClass?: ClassValue;
   callerInstructionIndex?: number;
   currentException?: ExceptionValue;
@@ -149,12 +150,13 @@ export class VM {
   private readonly moduleResolver: ModuleResolver;
   private builtins: Environment | null = null;
   private globals: Environment | null = null;
-  private moduleResult: Value = null;
+  private moduleResult: Value;
 
   constructor(
     readonly platform: Platform,
     readonly recursionLimit = 1000,
   ) {
+    this.moduleResult = makeNone(this.heap);
     this.moduleResolver = new ModuleResolver(platform);
     if (!Number.isInteger(recursionLimit) || recursionLimit < 1) {
       throw new ThmValueError("recursion limit must be a positive integer");
@@ -204,7 +206,7 @@ export class VM {
     const depth = this.frames.length;
     const stackBase = this.stack.length;
     const boundary: CallbackBoundary = { depth };
-    const capture = depth === 0 ? { complete: false, value: null as Value } : undefined;
+    const capture = depth === 0 ? { complete: false, value: makeNone(this.heap) } : undefined;
     this.callbackBoundaries.push(boundary);
     try {
       this.pushFunctionFrame(callback, args, keywords, capture, ownerClass);
@@ -663,7 +665,7 @@ export class VM {
         }
         isMetaclass ||= bases.some((base) => base.isMetaclass);
         if (
-          metaclassValue !== null &&
+          !isKind(metaclassValue, "none") &&
           !isKind(metaclassValue, "class") &&
           !(isKind(metaclassValue, "type") && metaclassValue.name === "type")
         ) {
@@ -675,7 +677,7 @@ export class VM {
         const metaclassCandidates: Array<ClassValue | TypeValue> = bases.map((base) =>
           base.metaclass ?? this.rootMetaclass,
         );
-        if (metaclassValue !== null) {
+        if (!isKind(metaclassValue, "none")) {
           metaclassCandidates.push(
             isKind(metaclassValue, "class") ? metaclassValue : this.rootMetaclass,
           );
@@ -783,7 +785,6 @@ export class VM {
       case "HALT":
         if (this.stack.length !== frame.stackBase) throw new RuntimeError("HALT with an unbalanced operand stack");
         this.frames.pop();
-        this.moduleResult = null;
         return;
     }
   }
@@ -792,7 +793,7 @@ export class VM {
     fn: FunctionValue,
     args: Value[],
     keywords: ReadonlyMap<string, Value> = new Map(),
-    capture?: { complete: boolean; value: Value; environment?: Environment },
+    capture?: { complete: boolean; value: Value | null; environment?: Environment },
     ownerClass?: ClassValue,
   ): void {
     const environment = this.bindFunction(fn, args, keywords);
@@ -888,6 +889,7 @@ export class VM {
   private runCoroutine(coroutine: CoroutineValue): Value {
     if (coroutine.done) {
       if (coroutine.error !== undefined) throw coroutine.error;
+      if (coroutine.result === null) throw new RuntimeError("Coroutine completed without result");
       return coroutine.result;
     }
     if (coroutine.started) {
@@ -939,9 +941,9 @@ export class VM {
     const typeNames = [...Object.keys(EXCEPTION_PARENTS), "bool", "dict", "float", "int", "list", "range", "set", "str", "tuple"];
     for (const name of typeNames) globals.set(name, makeType(this.heap, name));
 
-    this.addBuiltin("write", (vm, _receiver, args) => {
-      vm.platform.stdout(`${args.map((value) => vm.stringify(value, false)).join(" ")}\n`);
-      return null;
+    this.addBuiltin("write", (vm: VM, _receiver: Value | undefined, args: Value[]): Value => {
+      vm.platform.stdout(`${args.map((value: Value) => vm.stringify(value, false)).join(" ")}\n`);
+      return makeNone(vm.heap);
     });
     this.addBuiltin("print", (vm, receiver, args) => {
       const write = vm.readGlobal("write");
@@ -964,7 +966,10 @@ export class VM {
       if (isKind(type, "class")) {
         const value = args[0]!;
         if (isKind(value, "class")) {
-          return isKind(value.metaclass, "class") && vm.isSubclass(value.metaclass, type);
+          const metaclass = value.metaclass;
+          if (metaclass !== null && metaclass.kind === "class") {
+            return vm.isSubclass(metaclass, type);
+          }
         }
         if (!isKind(value, "instance")) return false;
         return vm.isSubclass(value.klass, type);
@@ -995,7 +1000,7 @@ export class VM {
       if (frame?.ownerClass === undefined) throw new ThmTypeError("super(): no enclosing class method");
       const firstParameter = frame.chunk.parameters[0];
       const cell = firstParameter === undefined ? undefined : frame.environment.cells.get(firstParameter);
-      if (cell === undefined || !cell.bound || (!isKind(cell.value, "instance") && !isKind(cell.value, "class"))) {
+      if (cell === undefined || !cell.bound || cell.value === null || (!isKind(cell.value, "instance") && !isKind(cell.value, "class"))) {
         throw new ThmTypeError("super(): first method argument must be an instance or class");
       }
       const runtimeClass = isKind(cell.value, "instance") ? cell.value.klass : cell.value;
@@ -1016,7 +1021,7 @@ export class VM {
       if (args.length < 1 || args.length > 3) {
         throw new ThmTypeError("property() expects one to three arguments");
       }
-      return makeDescriptor(vm.heap, "property", args[0]!, args[1] ?? null, args[2] ?? null);
+      return makeDescriptor(vm.heap, "property", args[0]!, args[1] ?? makeNone(vm.heap), args[2] ?? makeNone(vm.heap));
     });
     this.addBuiltin("type", (vm, _receiver, args) => vm.typeCall(args));
     this.addBuiltin("gc_collect", (vm, _receiver, args) => {
@@ -1197,7 +1202,7 @@ export class VM {
         throw error;
       }
     });
-    this.addBuiltin("getattr", (vm, _receiver, args) => {
+    this.addBuiltin("getattr", (vm: VM, _receiver: Value | undefined, args: Value[]): Value => {
       if (args.length < 2 || args.length > 3) throw new ThmTypeError("getattr() expects two or three arguments");
       if (typeof args[1] !== "string") throw new ThmTypeError("getattr(): attribute name must be a string");
       try {
@@ -1207,11 +1212,11 @@ export class VM {
         throw error;
       }
     });
-    this.addBuiltin("setattr", (vm, _receiver, args) => {
+    this.addBuiltin("setattr", (vm: VM, _receiver: Value | undefined, args: Value[]): Value => {
       vm.requireArgCount("setattr", args, 3);
       if (typeof args[1] !== "string") throw new ThmTypeError("setattr(): attribute name must be a string");
       vm.setAttribute(args[0]!, args[1], args[2]!);
-      return null;
+      return makeNone(vm.heap);
     });
 
     const registered = getBuiltinGlobals();
@@ -1223,12 +1228,12 @@ export class VM {
     }
   }
 
-  private installRegisteredGlobal(name: string, value: Value): void {
+  private installRegisteredGlobal(name: string, value: Value | null): void {
     const builtins = this.builtins!;
     if (builtins.cells.has(name)) {
       throw new RuntimeError(`Built-in global '${name}' conflicts with an existing built-in`);
     }
-    builtins.set(name, value);
+    builtins.set(name, value === null ? makeNone(this.heap) : value);
   }
 
   private importModule(requestedName: string, importer?: ModuleValue): ModuleValue {
@@ -1420,7 +1425,7 @@ export class VM {
     while (current !== null) {
       const cell = current.cells.get(name);
       if (cell !== undefined) {
-        if (!cell.bound) throw new ThmNameError(`cannot access '${name}' before assignment`);
+        if (!cell.bound || cell.value === null) throw new ThmNameError(`cannot access '${name}' before assignment`);
         return cell.value;
       }
       current = current.parent;
@@ -1445,7 +1450,7 @@ export class VM {
     let current: Environment | null = environment;
     while (current !== null) {
       const cell = current.cells.get(name);
-      if (cell !== undefined && cell.bound) return cell.value;
+      if (cell !== undefined && cell.bound && cell.value !== null) return cell.value;
       current = current.parent;
     }
     throw new ThmNameError(`name '${name}' is not defined`);
@@ -1453,7 +1458,7 @@ export class VM {
 
   private findCell(environment: Environment, name: string, allowUnbound: boolean): Value {
     const cell = environment.cells.get(name);
-    if (cell === undefined || !cell.bound) {
+    if (cell === undefined || !cell.bound || cell.value === null) {
       if (allowUnbound && cell !== undefined) throw new ThmNameError(`cannot access '${name}' before assignment`);
       throw new ThmNameError(`name '${name}' is not defined`);
     }
@@ -1700,6 +1705,7 @@ export class VM {
       }
       return this.number(left, "comparison") === this.number(right, "comparison");
     }
+    if (isKind(left, "none") && isKind(right, "none")) return true;
     const pending: Array<[Value, Value]> = [[left, right]];
     const visited: Array<[object, object]> = [];
     while (pending.length > 0) {
@@ -1713,9 +1719,7 @@ export class VM {
       if (a === b) continue;
       if (
         typeof a !== "object" ||
-        a === null ||
         typeof b !== "object" ||
-        b === null ||
         a.kind !== b.kind
       ) return false;
       if (visited.some(([x, y]) => x === a && y === b)) continue;
@@ -1758,7 +1762,7 @@ export class VM {
   }
 
   private truthy(value: Value): boolean {
-    if (value === null || value === false) return false;
+    if (isKind(value, "none") || value === false) return false;
     if (value === true) return true;
     if (typeof value === "number") return value !== 0 && !Number.isNaN(value);
     if (typeof value === "bigint") return value !== BigInt(0);
@@ -1869,7 +1873,7 @@ export class VM {
     if (!isKind(receiver, "list")) {
       throw new ThmTypeError(`'${this.typeName(receiver)}' object doesn't support slice deletion`);
     }
-    const step = stepValue === null ? 1 : this.integer(stepValue, "slice step");
+    const step = this.isNone(stepValue) ? 1 : this.integer(stepValue, "slice step");
     if (step === 0) throw new ThmValueError("slice step cannot be zero");
     const doomed = new Set(this.sliceIndices(receiver.items.length, start, stop, step));
     receiver.items = receiver.items.filter((_, index) => !doomed.has(index));
@@ -1879,13 +1883,13 @@ export class VM {
     if (!isKind(receiver, "list")) {
       throw new ThmTypeError(`'${this.typeName(receiver)}' object does not support slice assignment`);
     }
-    const step = stepValue === null ? 1 : this.integer(stepValue, "slice step");
+    const step = this.isNone(stepValue) ? 1 : this.integer(stepValue, "slice step");
     if (step === 0) throw new ThmValueError("slice step cannot be zero");
     const replacement = [...this.iterateAll(value)];
     const length = receiver.items.length;
     if (step === 1) {
-      const from = start === null ? 0 : this.normalizeSliceBound(this.integer(start, "slice index"), length, 0, length);
-      let to = stop === null ? length : this.normalizeSliceBound(this.integer(stop, "slice index"), length, 0, length);
+      const from = this.isNone(start) ? 0 : this.normalizeSliceBound(this.integer(start, "slice index"), length, 0, length);
+      let to = this.isNone(stop) ? length : this.normalizeSliceBound(this.integer(stop, "slice index"), length, 0, length);
       if (to < from) to = from;
       receiver.items.splice(from, to - from, ...replacement);
       return;
@@ -1902,7 +1906,7 @@ export class VM {
   }
 
   private getSlice(receiver: Value, start: Value, stop: Value, stepValue: Value): Value {
-    const step = stepValue === null ? 1 : this.integer(stepValue, "slice step");
+    const step = this.isNone(stepValue) ? 1 : this.integer(stepValue, "slice step");
     if (step === 0) throw new ThmValueError("slice step cannot be zero");
     if (isKind(receiver, "list") || isKind(receiver, "tuple")) {
       const indices = this.sliceIndices(receiver.items.length, start, stop, step);
@@ -1916,19 +1920,23 @@ export class VM {
     throw new ThmTypeError(`'${this.typeName(receiver)}' object is not sliceable`);
   }
 
+  private isNone(value: Value): boolean {
+    return value === null || isKind(value, "none");
+  }
+
   private sliceIndices(length: number, startValue: Value, stopValue: Value, step: number): number[] {
     const result: number[] = [];
     let start: number;
     let stop: number;
     if (step > 0) {
-      start = startValue === null ? 0 : this.normalizeSliceBound(this.integer(startValue, "slice index"), length, 0, length);
-      stop = stopValue === null ? length : this.normalizeSliceBound(this.integer(stopValue, "slice index"), length, 0, length);
+      start = this.isNone(startValue) ? 0 : this.normalizeSliceBound(this.integer(startValue, "slice index"), length, 0, length);
+      stop = this.isNone(stopValue) ? length : this.normalizeSliceBound(this.integer(stopValue, "slice index"), length, 0, length);
       for (let index = start; index < stop; index += step) result.push(index);
     } else {
-      start = startValue === null
+      start = this.isNone(startValue)
         ? length - 1
         : this.normalizeSliceBound(this.integer(startValue, "slice index"), length, -1, length - 1);
-      stop = stopValue === null
+      stop = this.isNone(stopValue)
         ? -1
         : this.normalizeSliceBound(this.integer(stopValue, "slice index"), length, -1, length - 1);
       for (let index = start; index > stop; index += step) result.push(index);
@@ -1950,7 +1958,7 @@ export class VM {
   private getAttribute(receiver: Value, name: string): Value {
     if (isKind(receiver, "module")) {
       const cell = receiver.environment.cells.get(name);
-      if (cell !== undefined && cell.bound) return cell.value;
+      if (cell !== undefined && cell.bound && cell.value !== null) return cell.value;
       if (receiver.isPackage) {
         const childName = `${receiver.name}.${name}`;
         if (this.moduleResolver.resolveFile(childName) !== undefined) return this.importModule(childName, receiver);
@@ -1994,37 +2002,42 @@ export class VM {
     }
     if (isKind(receiver, "class")) {
       if (name === "__name__") return receiver.name;
-      const metaMember = isKind(receiver.metaclass, "class")
-        ? this.lookupClassMemberWithOwner(receiver.metaclass, name)
-        : undefined;
-      if (metaMember !== undefined && isKind(receiver.metaclass, "class") && this.isDataDescriptor(metaMember.value)) {
-        return this.getDescriptorValue(metaMember.value, receiver, receiver.metaclass, metaMember.owner);
+      const metaclass = receiver.metaclass;
+      let metaMember: { value: Value; owner: ClassValue } | undefined;
+      if (metaclass !== null && metaclass.kind === "class") {
+        metaMember = this.lookupClassMemberWithOwner(metaclass, name);
+      }
+      if (metaMember !== undefined && metaclass !== null && metaclass.kind === "class" && this.isDataDescriptor(metaMember.value)) {
+        return this.getDescriptorValue(metaMember.value, receiver, metaclass!, metaMember.owner);
       }
       const member = this.lookupClassMemberWithOwner(receiver, name);
       if (member !== undefined) return this.getDescriptorValue(member.value, null, receiver, member.owner);
-      if (metaMember !== undefined && isKind(receiver.metaclass, "class")) {
+      if (metaMember !== undefined && metaclass !== null && metaclass.kind === "class") {
         const value = metaMember.value;
         if (isKind(value, "function")) {
           return makeNative(this.heap, `${receiver.name}.${name}`, (vm, _boundReceiver, args, keywords) =>
             vm.invokeCallback(value, [receiver, ...args], metaMember.owner, keywords), [receiver, value, metaMember.owner], true);
         }
-        return this.getDescriptorValue(value, receiver, receiver.metaclass, metaMember.owner);
+        return this.getDescriptorValue(value, receiver, metaclass!, metaMember.owner);
       }
       throw new ThmAttributeError(`type object '${receiver.name}' has no attribute '${name}'`);
     }
-    if (isKind(receiver, "descriptor")) {
+if (isKind(receiver, "descriptor")) {
       if (receiver.descriptorKind === "property" && (name === "setter" || name === "deleter" || name === "getter")) {
         return makeNative(this.heap, `property.${name}`, (_vm, _boundReceiver, args) => {
           this.requireArgCount(`property.${name}`, args, 1);
+          const setter = receiver.setter!;
+          const deleter = receiver.deleter!;
+          const value = receiver.value!;
           const replacement = name === "setter"
-            ? makeDescriptor(this.heap, "property", receiver.value, args[0]!, receiver.deleter)
+            ? makeDescriptor(this.heap, "property", value, args[0]!, deleter)
             : name === "deleter"
-              ? makeDescriptor(this.heap, "property", receiver.value, receiver.setter, args[0]!)
-              : makeDescriptor(this.heap, "property", args[0]!, receiver.setter, receiver.deleter);
+            ? makeDescriptor(this.heap, "property", value, setter, args[0]!)
+            : makeDescriptor(this.heap, "property", args[0]!, setter, deleter);
           return replacement;
         }, [receiver]);
       }
-      if (name === "__func__" && receiver.descriptorKind !== "property") return receiver.value;
+      if (name === "__func__" && receiver.descriptorKind !== "property") return receiver.value!;
     }
     if (isKind(receiver, "native") && receiver.name === "type" && name === "__new__") {
       return makeNative(this.heap, "type.__new__", (vm, _boundReceiver, args) => vm.typeNew(args));
@@ -2062,8 +2075,9 @@ export class VM {
       return;
     }
     if (isKind(receiver, "class")) {
-      if (isKind(receiver.metaclass, "class")) {
-        const found = this.lookupClassMemberWithOwner(receiver.metaclass, name);
+      const metaclass = receiver.metaclass;
+      if (metaclass !== null && metaclass.kind === "class") {
+        const found = this.lookupClassMemberWithOwner(metaclass, name);
         if (found !== undefined && this.isDataDescriptor(found.value)) {
           this.setDescriptorValue(found.value, receiver, value);
           return;
@@ -2089,8 +2103,9 @@ export class VM {
       return;
     }
     if (isKind(receiver, "class")) {
-      if (isKind(receiver.metaclass, "class")) {
-        const found = this.lookupClassMemberWithOwner(receiver.metaclass, name);
+      const metaclass = receiver.metaclass;
+      if (metaclass !== null && metaclass.kind === "class") {
+        const found = this.lookupClassMemberWithOwner(metaclass, name);
         if (found !== undefined && this.isDataDescriptor(found.value)) {
           this.deleteDescriptorValue(found.value, receiver);
           return;
@@ -2118,25 +2133,25 @@ export class VM {
     definingClass: ClassValue = owner,
   ): Value {
     if (isKind(value, "descriptor")) {
-      if (value.descriptorKind === "staticmethod") return value.value;
+      if (value.descriptorKind === "staticmethod") return value.value!;
       if (value.descriptorKind === "classmethod") {
         return makeNative(this.heap, `${owner.name}.classmethod`, (vm, _receiver, args, keywords) =>
-          vm.invokeCallback(value.value, [owner, ...args], definingClass, keywords), [value, owner, definingClass], true);
+          vm.invokeCallback(value.value!, [owner, ...args], definingClass, keywords), [value, owner, definingClass], true);
       }
       if (instance === null) return value;
-      if (value.value === null) throw new ThmTypeError(`unreadable property on '${owner.name}'`);
-      return this.invokeCallback(value.value, [instance], definingClass);
+      if (value.value === null || isKind(value.value, "none")) throw new ThmTypeError(`unreadable property on '${owner.name}'`);
+      return this.invokeCallback(value.value!, [instance as Value], definingClass);
     }
     if (isKind(value, "instance")) {
       const getMethod = this.lookupClassMemberWithOwner(value.klass, "__get__");
-      if (getMethod !== undefined) return this.invokeDescriptorMethod(value, getMethod, [instance, owner]);
+      if (getMethod !== undefined) return this.invokeDescriptorMethod(value, getMethod, [instance === null ? makeNone(this.heap) : instance, owner]);
     }
     return value;
   }
 
   private setDescriptorValue(value: Value, instance: InstanceValue | ClassValue, assigned: Value): void {
     if (isKind(value, "descriptor") && value.descriptorKind === "property") {
-      if (value.setter === null) throw new ThmTypeError("property has no setter");
+      if (value.setter === null || isKind(value.setter, "none")) throw new ThmTypeError("property has no setter");
       this.invokeCallback(value.setter, [instance, assigned]);
       return;
     }
@@ -2152,7 +2167,7 @@ export class VM {
 
   private deleteDescriptorValue(value: Value, instance: InstanceValue | ClassValue): void {
     if (isKind(value, "descriptor") && value.descriptorKind === "property") {
-      if (value.deleter === null) throw new ThmTypeError("property has no deleter");
+      if (value.deleter === null || isKind(value.deleter, "none")) throw new ThmTypeError("property has no deleter");
       this.invokeCallback(value.deleter, [instance]);
       return;
     }
@@ -2181,7 +2196,7 @@ export class VM {
   private lookupClassMemberWithOwner(klass: ClassValue, name: string): { value: Value; owner: ClassValue } | undefined {
     for (const owner of klass.mro) {
       const cell = owner.environment.cells.get(name);
-      if (cell?.bound) return { value: cell.value, owner };
+      if (cell?.bound && cell.value !== null) return { value: cell.value, owner };
     }
     return undefined;
   }
@@ -2199,7 +2214,7 @@ export class VM {
     }
     if (!isKind(initializer.value, "function")) throw new ThmTypeError(`${klass.name}.__init__ must be a function`);
     const result = this.invokeCallback(initializer.value, [instance, ...args], initializer.owner, keywords);
-    if (result !== null) throw new ThmTypeError(`__init__() should return None, not '${this.typeName(result)}'`);
+    if (!isKind(result, "none")) throw new ThmTypeError(`__init__() should return None, not '${this.typeName(result)}'`);
     return instance;
   }
 
@@ -2208,10 +2223,11 @@ export class VM {
     args: Value[],
     keywords: ReadonlyMap<string, Value> = new Map(),
   ): Value {
-    if (isKind(klass.metaclass, "class")) {
-      const callMethod = this.lookupClassMemberWithOwner(klass.metaclass, "__call__");
+    const metaclass = klass.metaclass;
+    if (metaclass !== null && metaclass.kind === "class") {
+      const callMethod = this.lookupClassMemberWithOwner(metaclass, "__call__");
       if (callMethod !== undefined) {
-        const callback = isKind(callMethod.value, "descriptor") ? callMethod.value.value : callMethod.value;
+        const callback = isKind(callMethod.value, "descriptor") ? callMethod.value.value! : callMethod.value;
         return this.invokeCallback(callback, [klass, ...args], callMethod.owner, keywords);
       }
     }
@@ -2228,7 +2244,7 @@ export class VM {
   ): Value {
     const namespace = makeDict(this.heap);
     for (const [memberName, cell] of bodyEnvironment.cells) {
-      if (cell.bound) this.dictSet(namespace, memberName, cell.value);
+      if (cell.bound && cell.value !== null) this.dictSet(namespace, memberName, cell.value);
     }
     if (!isKind(metaclass, "class")) {
       return makeClass(this.heap, name, bodyEnvironment, bases, metaclass, isMetaclass, genericParameters);
@@ -2239,7 +2255,7 @@ export class VM {
     if (newMethod === undefined) {
       created = makeClass(this.heap, name, bodyEnvironment, bases, metaclass, isMetaclass, genericParameters);
     } else {
-      const callback = isKind(newMethod.value, "descriptor") ? newMethod.value.value : newMethod.value;
+      const callback = isKind(newMethod.value, "descriptor") ? newMethod.value.value! : newMethod.value;
       if (!isKind(callback, "function") && !isKind(callback, "native")) {
         throw new ThmTypeError("metaclass __new__ must be callable");
       }
@@ -2252,7 +2268,7 @@ export class VM {
     if (isKind(created, "class")) {
       const initMethod = this.lookupClassMemberWithOwner(metaclass, "__init__");
       if (initMethod !== undefined) {
-        const callback = isKind(initMethod.value, "descriptor") ? initMethod.value.value : initMethod.value;
+        const callback = isKind(initMethod.value, "descriptor") ? initMethod.value.value! : initMethod.value;
         if (!isKind(callback, "function") && !isKind(callback, "native")) {
           throw new ThmTypeError("metaclass __init__ must be callable");
         }
@@ -2261,7 +2277,7 @@ export class VM {
           [created, name, makeTuple(this.heap, bases), namespace],
           initMethod.owner,
         );
-        if (result !== null) throw new ThmTypeError("metaclass __init__() should return None");
+        if (!isKind(result, "none")) throw new ThmTypeError("metaclass __init__() should return None");
       }
     }
     return created;
@@ -2305,7 +2321,8 @@ export class VM {
       makeNative(this.heap, `str.${name}`, (_vm, _receiver, args) => callback(args), [receiver]);
     const text = (value: Value | undefined, label: string): string => {
       if (typeof value !== "string") {
-        throw new ThmTypeError(`str.${name}() ${label} must be a string, not '${this.typeName(value ?? null)}'`);
+        const typeStr = value === undefined ? "undefined" : this.typeName(value);
+        throw new ThmTypeError(`str.${name}() ${label} must be a string, not '${typeStr}'`);
       }
       return value;
     };
@@ -2666,7 +2683,7 @@ export class VM {
 
   private dictionaryMethod(receiver: DictValue, name: string): NativeValue | undefined {
     const method = (callback: (args: Value[]) => Value): NativeValue =>
-      makeNative(this.heap, `dict.${name}`, (_vm, _receiver, args) => callback(args), [receiver]);
+      makeNative(this.heap, `dict.${name}`, (_vm: VM, _receiver: Value | undefined, args: Value[]): Value => callback(args), [receiver]);
     switch (name) {
       case "keys":
         return method((args) => {
@@ -2684,10 +2701,10 @@ export class VM {
           return makeList(this.heap, receiver.entries.map((entry) => makeTuple(this.heap, [entry.key, entry.value])));
         });
       case "get":
-        return method((args) => {
+        return method((args): Value => {
           if (args.length < 1 || args.length > 2) throw new ThmTypeError("dict.get() expects one or two arguments");
           const found = this.dictFind(receiver, args[0]!);
-          return found !== undefined ? found.value : (args[1] ?? null);
+          return found !== undefined ? found.value : (args[1] ?? makeNone(this.heap));
         });
       case "pop":
         return method((args) => {
@@ -2704,7 +2721,7 @@ export class VM {
           if (args.length > 1) throw new ThmTypeError("dict.update() expects at most one positional argument");
           if (args.length === 1) this.dictUpdateFrom(receiver, args[0]!);
           for (const [key, value] of keywords ?? new Map<string, Value>()) this.dictSet(receiver, key, value);
-          return null;
+          return makeNone(this.heap);
         }, [receiver], true);
       case "__contains__":
         return method((args) => {
@@ -2715,7 +2732,7 @@ export class VM {
         return method((args) => {
           this.requireArgCount(name, args, 0);
           receiver.entries.length = 0;
-          return null;
+          return makeNone(this.heap);
         });
       case "copy":
         return method((args) => {
@@ -2727,7 +2744,7 @@ export class VM {
           if (args.length < 1 || args.length > 2) throw new ThmTypeError("dict.setdefault() expects one or two arguments");
           const existing = this.dictFind(receiver, args[0]!);
           if (existing !== undefined) return existing.value;
-          const value = args[1] ?? null;
+          const value = args[1] ?? makeNone(this.heap);
           this.dictSet(receiver, args[0]!, value);
           return value;
         });
@@ -2742,9 +2759,9 @@ export class VM {
         return method((args) => {
           if (args.length < 1 || args.length > 2) throw new ThmTypeError("dict.fromkeys() expects one or two arguments");
           const result = makeDict(this.heap);
-          const defaultVal = args[1] ?? null;
+          const defaultVal = args[1] ?? makeNone(this.heap);
           for (const key of this.iterateAll(args[0]!)) {
-            if (typeof key !== "string" && typeof key !== "number" && typeof key !== "bigint" && typeof key !== "boolean" && key !== null) {
+            if (typeof key !== "string" && typeof key !== "number" && typeof key !== "bigint" && typeof key !== "boolean" && !isKind(key, "none")) {
               throw new ThmTypeError("dictionary keys must be hashable");
             }
             this.dictSet(result, key, defaultVal);
@@ -2764,7 +2781,7 @@ export class VM {
         return method((args) => {
           this.requireArgCount(name, args, 1);
           receiver.items.push(args[0]!);
-          return null;
+          return makeNone(this.heap);
         });
       case "insert":
         return method((args) => {
@@ -2772,7 +2789,7 @@ export class VM {
           const rawIndex = this.integer(args[0]!, "list.insert index");
           const index = rawIndex < 0 ? Math.max(receiver.items.length + rawIndex, 0) : Math.min(rawIndex, receiver.items.length);
           receiver.items.splice(index, 0, args[1]!);
-          return null;
+          return makeNone(this.heap);
         });
       case "pop":
         return method((args) => {
@@ -2788,12 +2805,12 @@ export class VM {
           const index = receiver.items.findIndex((item) => this.equalValues(item, args[0]!));
           if (index < 0) throw new ThmValueError("list.remove(x): x not in list");
           receiver.items.splice(index, 1);
-          return null;
+          return makeNone(this.heap);
         });
       case "extend":
         return method((args) => {
           for (const arg of args) for (const item of this.iterateAll(arg)) receiver.items.push(item);
-          return null;
+          return makeNone(this.heap);
         });
       case "index":
         return method((args) => {
@@ -2816,7 +2833,7 @@ export class VM {
         return method((args) => {
           this.requireArgCount(name, args, 0);
           receiver.items.length = 0;
-          return null;
+          return makeNone(this.heap);
         });
       case "copy":
         return method((args) => {
@@ -2827,14 +2844,14 @@ export class VM {
         return method((args) => {
           this.requireArgCount(name, args, 0);
           receiver.items.reverse();
-          return null;
+          return makeNone(this.heap);
         });
       case "sort":
         return makeNative(this.heap, "list.sort", (_vm, _receiver, args, keywords) => {
           this.requireArgCount("list.sort", args, 0);
           const { key, reverse } = this.sortKeywords("list.sort", keywords);
           this.sortValues(receiver.items, key, reverse);
-          return null;
+          return makeNone(this.heap);
         }, [receiver], true);
       default:
         return undefined;
@@ -2848,7 +2865,7 @@ export class VM {
       return method((args) => {
         this.requireArgCount(name, args, 1);
         this.setAdd(receiver, args[0]!);
-        return null;
+        return makeNone(this.heap);
       });
     }
     if (name === "remove") {
@@ -2856,14 +2873,14 @@ export class VM {
         this.requireArgCount(name, args, 1);
         if (!this.setHas(receiver, args[0]!)) throw new ThmKeyError(this.stringify(args[0]!, true));
         receiver.items = receiver.items.filter((item) => !this.equalValues(item, args[0]!));
-        return null;
+        return makeNone(this.heap);
       });
     }
     if (name === "discard") {
       return method((args) => {
         this.requireArgCount(name, args, 1);
         receiver.items = receiver.items.filter((item) => !this.equalValues(item, args[0]!));
-        return null;
+        return makeNone(this.heap);
       });
     }
     if (name === "difference") {
@@ -2888,14 +2905,14 @@ export class VM {
     if (name === "update") {
       return method((args) => {
         for (const arg of args) for (const item of this.iterateAll(arg)) this.setAdd(receiver, item);
-        return null;
+        return makeNone(this.heap);
       });
     }
     if (name === "clear") {
       return method((args) => {
         this.requireArgCount(name, args, 0);
         receiver.items.length = 0;
-        return null;
+        return makeNone(this.heap);
       });
     }
     if (name === "copy") {
@@ -2951,7 +2968,7 @@ export class VM {
           receiver.items = original.filter((item) => !values.some((value) => this.equalValues(item, value)));
           for (const value of values) if (!original.some((item) => this.equalValues(item, value))) this.setAdd(receiver, value);
         }
-        return null;
+        return makeNone(this.heap);
       });
     }
     return undefined;
@@ -3026,7 +3043,7 @@ export class VM {
   }
 
   private hashValue(value: Value, visited = new Set<number>()): string {
-    if (value === null) return "none";
+    if (isKind(value, "none")) return "none";
     if (typeof value === "boolean") return `number:${value ? 1 : 0}`;
     if (typeof value === "number") return `number:${Object.is(value, -0) ? 0 : value}`;
     if (typeof value === "bigint") return `number:${value}`;
@@ -3163,7 +3180,7 @@ export class VM {
   }
 
   /** Stable sort with optional `key` function and `reverse` flag (Python semantics). */
-  private sortValues(values: Value[], key: Value = null, reverse = false): void {
+  private sortValues(values: Value[], key: Value | null = null, reverse = false): void {
     const keys = key === null ? values : values.map((value) => this.invokeCallback(key, [value]));
     const order = values.map((_, index) => index);
     order.sort((left, right) => {
@@ -3175,8 +3192,8 @@ export class VM {
   }
 
   /** Read `key=` / `reverse=` keyword arguments, rejecting anything else. */
-  private sortKeywords(name: string, keywords: ReadonlyMap<string, Value> | undefined): { key: Value; reverse: boolean } {
-    let key: Value = null;
+  private sortKeywords(name: string, keywords: ReadonlyMap<string, Value> | undefined): { key: Value | null; reverse: boolean } {
+    let key: Value | null = null;
     let reverse = false;
     for (const [keyword, value] of keywords ?? new Map<string, Value>()) {
       if (keyword === "key") key = value;
@@ -3187,7 +3204,7 @@ export class VM {
   }
 
   private minMax(kind: "min" | "max", args: Value[], keywords?: ReadonlyMap<string, Value>): Value {
-    let key: Value = null;
+    let key: Value | null = null;
     let fallback: Value | undefined;
     for (const [keyword, value] of keywords ?? new Map<string, Value>()) {
       if (keyword === "key") key = value;
@@ -3210,7 +3227,7 @@ export class VM {
   }
 
   private typeName(value: Value): string {
-    if (value === null) return "NoneType";
+    if (isKind(value, "none")) return "NoneType";
     if (typeof value === "boolean") return "bool";
     if (typeof value === "bigint") return "int";
     if (typeof value === "number") return "float";
@@ -3257,7 +3274,7 @@ export class VM {
   }
 
   private stringify(value: Value, representation: boolean, visited = new Set<number>()): string {
-    if (value === null) return "none";
+    if (isKind(value, "none")) return "none";
     if (typeof value === "boolean") return value ? "true" : "false";
     if (typeof value === "bigint") return String(value);
     if (typeof value === "number") return String(value);
@@ -3326,6 +3343,9 @@ export class VM {
     if (value !== null && typeof value === "object" && value.constructor.name === "Uint8Array") {
       return makeBytes(this.heap, value as Uint8Array);
     }
+    if (value === null) {
+      return makeNone(this.heap);
+    }
     return value as Value;
   }
 
@@ -3361,7 +3381,7 @@ export class VM {
     roots.push(...this.modules.values());
     for (const frame of this.frames) {
       roots.push(frame.environment);
-      if (frame.capture !== undefined) roots.push(...managedReferences([frame.capture.value]));
+      if (frame.capture !== undefined && frame.capture.value !== null) roots.push(...managedReferences([frame.capture.value]));
     }
     return roots;
   }

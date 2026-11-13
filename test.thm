@@ -1,14 +1,15 @@
 
-import os
+
+import http
 
 
 
 
-# source = os.system("cat main.ts")
 
-write(os.platform())
-write(os.arch())
-write(os.version())
-write(os.cpus())
+def test(a:int=10,b:int=20)-> int {
+    return a + b
+}
 
+t = test(b=5,a=2)
 
+write(t)

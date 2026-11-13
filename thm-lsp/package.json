@@ -1,0 +1,22 @@
+{
+  "name": "thm-lsp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Language Server Protocol implementation for the THM scripting language",
+  "main": "out/cli.js",
+  "bin": {
+    "thm-lsp": "out/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node out/cli.js --stdio",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

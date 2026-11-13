@@ -4,7 +4,7 @@ import type { VM } from "../vm/vm.js";
 
 export interface Cell {
   bound: boolean;
-  value: Value;
+  value: Value | null;
 }
 
 export class Environment extends ManagedObject {
@@ -41,7 +41,7 @@ export class Environment extends ManagedObject {
   references(): ManagedObject[] {
     const refs: ManagedObject[] = [];
     for (const cell of this.cells.values()) {
-      if (cell.bound) refs.push(...managedReferences([cell.value]));
+      if (cell.bound && cell.value !== null) refs.push(...managedReferences([cell.value]));
     }
     if (this.parent !== null) refs.push(this.parent);
     if (this.module !== null) refs.push(this.module);
@@ -147,6 +147,20 @@ export class BytesValue extends ManagedObject {
   }
 }
 
+export class NoneValue extends ManagedObject {
+  readonly kind = "none";
+
+  constructor(heapId: number) {
+    super(heapId);
+  }
+
+  references(): ManagedObject[] {
+    return [];
+  }
+
+  clearReferences(): void {}
+}
+
 export class FunctionValue extends ManagedObject {
   readonly kind = "function";
   readonly genericParameters: string[];
@@ -159,6 +173,7 @@ export class FunctionValue extends ManagedObject {
     readonly parameterSpecs: FunctionParameterSpec[],
     public defaults: Value[],
     readonly isAsync = false,
+    readonly isGenerator = false,
   ) {
     super(heapId);
     this.genericParameters = [...chunk.genericParameters];
@@ -284,13 +299,13 @@ export class DescriptorValue extends ManagedObject {
   constructor(
     heapId: number,
     readonly descriptorKind: DescriptorKind,
-    public value: Value,
+    public value: Value | null = null,
     public setter: Value | null = null,
     public deleter: Value | null = null,
   ) { super(heapId); }
 
   references(): ManagedObject[] {
-    return managedReferences([this.value, this.setter, this.deleter]);
+    return managedReferences([this.value, this.setter, this.deleter].filter((v): v is Value => v !== null));
   }
 
   clearReferences(): void {
@@ -356,7 +371,7 @@ export class ExceptionValue extends ManagedObject {
 export class CoroutineValue extends ManagedObject {
   readonly kind = "coroutine";
   public done = false;
-  public result: Value = null;
+  public result: Value | null = null;
   public error: unknown = undefined;
   public started = false;
 
@@ -374,7 +389,7 @@ export class CoroutineValue extends ManagedObject {
     const refs: ManagedObject[] = [this.fn];
     refs.push(...managedReferences(this.args));
     refs.push(...managedReferences([...this.keywords.values()]));
-    if (this.done && this.error === undefined) refs.push(...managedReferences([this.result]));
+    if (this.done && this.error === undefined && this.result !== null) refs.push(...managedReferences([this.result]));
     return refs;
   }
 
@@ -385,18 +400,33 @@ export class CoroutineValue extends ManagedObject {
   }
 }
 
-export type IteratorState =
-  | { kind: "sequence"; source: ListValue | TupleValue; index: number; step: 1 | -1 }
-  | { kind: "string"; source: string; index: number; step: 1 | -1 }
-  | { kind: "range"; source: RangeValue; index: number }
-  | { kind: "dict"; source: DictValue; index: number; size: number; mode: "keys" | "values" | "items" }
-  | { kind: "set"; source: SetValue; index: number; size: number }
-  | { kind: "enumerate"; source: IteratorValue; index: number }
-  | { kind: "zip"; sources: IteratorValue[] }
-  | { kind: "map"; sources: IteratorValue[]; callback: Value }
-  | { kind: "filter"; source: IteratorValue; callback: Value | null }
-  | { kind: "reverse-sequence"; source: ListValue | TupleValue; index: number }
-  | { kind: "reverse-string"; source: string; index: number };
+export class GeneratorValue extends ManagedObject {
+  readonly kind = "generator";
+  public done = false;
+  public frame: any = null;
+
+  constructor(
+    heapId: number,
+    readonly name: string,
+  ) {
+    super(heapId);
+  }
+
+  references(): ManagedObject[] {
+    const refs: ManagedObject[] = [];
+    if (this.frame) {
+      refs.push(this.frame.environment);
+      if (this.frame.module) refs.push(this.frame.module);
+      if (this.frame.currentException) refs.push(this.frame.currentException);
+    }
+    return refs;
+  }
+
+  clearReferences(): void {
+    this.frame = null;
+  }
+}
+
 
 export class IteratorValue extends ManagedObject {
   readonly kind = "iterator";
@@ -415,7 +445,6 @@ export class IteratorValue extends ManagedObject {
 }
 
 export type Value =
-  | null
   | boolean
   | bigint
   | number
@@ -436,7 +465,17 @@ export type Value =
   | SuperValue
   | ExceptionValue
   | IteratorValue
-  | CoroutineValue;
+  | CoroutineValue
+  | NoneValue;
+
+type ObjectValue = Exclude<Value, boolean | bigint | number | string>;
+
+export function isKind<K extends ObjectValue["kind"]>(
+  value: Value,
+  kind: K,
+): value is Extract<ObjectValue, { kind: K }> {
+  return typeof value === "object" && value !== null && value.kind === kind;
+}
 
 export function managedReferences(values: Value[]): ManagedObject[] {
   const refs: ManagedObject[] = [];
@@ -481,6 +520,10 @@ export function makeSet(heap: ManagedHeap, items: Value[] = []): SetValue {
 
 export function makeBytes(heap: ManagedHeap, data: Uint8Array): BytesValue {
   return heap.allocate((heapId) => new BytesValue(heapId, data));
+}
+
+export function makeNone(heap: ManagedHeap): NoneValue {
+  return heap.allocate((heapId) => new NoneValue(heapId));
 }
 
 export function makeFunction(

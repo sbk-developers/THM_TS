@@ -8,6 +8,7 @@ import { parse } from "../../src/parser/parser.js";
 import { ThmImportError, ThmTypeError } from "../../src/errors/errors.js";
 import type { Platform } from "../../src/platform/platform.js";
 import { VM } from "../../src/vm/vm.js";
+import { makeNone } from "../../src/runtime/values.js";
 import { equal, test, throws } from "../harness.js";
 
 function run(source: string, files: Record<string, string> = {}): string {
@@ -126,7 +127,7 @@ test("registered built-in functions and values are installed in the global scope
     "dev hello THM\n",
   );
   throws(
-    () => registerBuiltinGlobalFunction("THM_TEST_VERSION", () => null),
+    () => registerBuiltinGlobalFunction("THM_TEST_VERSION", (vm) => makeNone(vm.heap)),
     (error) => error instanceof Error && error.message.includes("already registered"),
   );
 });
@@ -135,7 +136,7 @@ test("built-in module registration rejects ambiguous member definitions", () => 
   throws(
     () =>
       registerBuiltinModule("test_ambiguous", {
-        functions: { duplicate: () => null },
+        functions: { duplicate: (vm) => makeNone(vm.heap) },
         values: { duplicate: 1 },
       }),
     (error) => error instanceof Error && error.message.includes("both a function and a value"),

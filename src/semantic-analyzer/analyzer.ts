@@ -43,6 +43,7 @@ export function analyzeScope(statements: Statement[], options: ScopeOptions): Sc
   validateControlStatements(statements, options.isFunction);
   const awaitAllowed = Boolean(options.allowAwait);
   validateAwaitInStatements(statements, awaitAllowed);
+  validateYieldInStatements(statements, options.isFunction);
   collectCapturesInStatements(statements, symbols);
 
   analyzeChildScopes(statements, new Set([...options.enclosingNames, ...symbols.locals]), awaitAllowed);
@@ -149,6 +150,12 @@ function collectCapturesInStatements(statements: Statement[], symbols: SymbolTab
       case "await":
         visitExpression(expression.value);
         return;
+      case "yield":
+        if (expression.value !== undefined) visitExpression(expression.value);
+        return;
+      case "yield":
+        if (expression.value !== undefined) visitExpression(expression.value);
+        return;
       case "call":
         visitExpression(expression.callee);
         expression.args.forEach((argument) => visitExpression(argument.value));
@@ -241,6 +248,9 @@ function validateAwaitInStatements(statements: Statement[], allowAwait: boolean)
       case "await":
         if (!allowAwait) throw new SyntaxError("await outside an async function", expression);
         visitExpression(expression.value);
+        return;
+      case "yield":
+        if (expression.value !== undefined) visitExpression(expression.value);
         return;
       case "literal":
       case "name":
@@ -355,5 +365,131 @@ function validateAwaitInStatements(statements: Statement[], allowAwait: boolean)
         break;
     }
     validateAwaitInStatements(nestedStatements(statement), allowAwait);
+  }
+}
+
+function validateYieldInStatements(statements: Statement[], inFunction: boolean): void {
+  const visitExpression = (expression: Expr): void => {
+    switch (expression.kind) {
+      case "yield":
+        if (!inFunction) throw new SyntaxError("yield outside function", expression);
+        if (expression.value !== undefined) visitExpression(expression.value);
+        return;
+      case "await":
+        visitExpression(expression.value);
+        return;
+      case "literal":
+      case "name":
+        return;
+      case "tuple":
+      case "list":
+      case "set":
+        expression.items.forEach(visitExpression);
+        return;
+      case "dict":
+        for (const [key, value] of expression.items) {
+          visitExpression(key);
+          visitExpression(value);
+        }
+        return;
+      case "unary":
+        visitExpression(expression.operand);
+        return;
+      case "binary":
+        visitExpression(expression.left);
+        visitExpression(expression.right);
+        return;
+      case "compare":
+        visitExpression(expression.first);
+        expression.rest.forEach((item) => visitExpression(item.right));
+        return;
+      case "conditional":
+        visitExpression(expression.whenTrue);
+        visitExpression(expression.condition);
+        visitExpression(expression.whenFalse);
+        return;
+      case "lambda":
+        return;
+      case "call":
+        visitExpression(expression.callee);
+        expression.args.forEach((argument) => visitExpression(argument.value));
+        return;
+      case "attribute":
+        visitExpression(expression.receiver);
+        return;
+      case "index":
+        visitExpression(expression.receiver);
+        visitExpression(expression.index);
+        return;
+      case "slice":
+        visitExpression(expression.receiver);
+        if (expression.start !== undefined) visitExpression(expression.start);
+        if (expression.stop !== undefined) visitExpression(expression.stop);
+        if (expression.step !== undefined) visitExpression(expression.step);
+        return;
+      case "fstring":
+        expression.parts.forEach((part) => {
+          if (typeof part !== "string") visitExpression(part);
+        });
+        return;
+      case "comprehension":
+        expression.clauses.forEach((clause) => {
+          visitExpression(clause.iterable);
+          clause.filters.forEach(visitExpression);
+        });
+        if (expression.key !== undefined) visitExpression(expression.key);
+        if (expression.element !== undefined) visitExpression(expression.element);
+        return;
+    }
+  };
+  for (const statement of statements) {
+    switch (statement.kind) {
+      case "expression": visitExpression(statement.expression); break;
+      case "assign":
+        statement.targets.forEach(visitExpression);
+        visitExpression(statement.value);
+        break;
+      case "annotate":
+        visitExpression(statement.target);
+        if (statement.value !== undefined) visitExpression(statement.value);
+        break;
+      case "augmentedAssign":
+        visitExpression(statement.target);
+        visitExpression(statement.value);
+        break;
+      case "delete":
+        statement.targets.forEach(visitExpression);
+        break;
+      case "if":
+      case "while":
+        visitExpression(statement.condition);
+        break;
+      case "for":
+        visitExpression(statement.iterable);
+        break;
+      case "return":
+      case "raise":
+        if (statement.value !== undefined) visitExpression(statement.value);
+        break;
+      case "assert":
+        visitExpression(statement.condition);
+        if (statement.message !== undefined) visitExpression(statement.message);
+        break;
+      case "try":
+        statement.handlers.forEach((handler) => {
+          if (handler.type !== undefined) visitExpression(handler.type);
+        });
+        break;
+      case "function":
+      case "class":
+      case "import":
+      case "fromImport":
+      case "break":
+      case "continue":
+      case "pass":
+      case "scope":
+        break;
+    }
+    for (const child of nestedStatements(statement)) validateYieldInStatements([child], inFunction);
   }
 }

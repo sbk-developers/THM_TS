@@ -1,5 +1,5 @@
 import { ThmIndexError, ThmTypeError, ThmValueError } from "../../errors/errors.js";
-import { makeList } from "../../runtime/values.js";
+import { makeList, makeNone } from "../../runtime/values.js";
 import type { NativeCallback, Value } from "../../runtime/values.js";
 import { registerBuiltinModule } from "../registry.js";
 
@@ -10,7 +10,7 @@ import { registerBuiltinModule } from "../registry.js";
 let state = 0;
 
 function seedFrom(value: Value): number {
-  if (value === null) return initialSeed();
+  if (typeof value === "object" && value !== null && "kind" in value && value.kind === "none") return initialSeed();
   let text: string;
   if (typeof value === "string") text = value;
   else if (typeof value === "bigint" || typeof value === "number" || typeof value === "boolean") text = String(value);
@@ -75,10 +75,10 @@ function expectArguments(args: Value[], functionName: string, low: number, high:
   }
 }
 
-const seed: NativeCallback = (_vm, _receiver, args) => {
+const seed: NativeCallback = (vm, _receiver, args) => {
   expectArguments(args, "seed", 0, 1);
   state = args.length === 0 ? initialSeed() : seedFrom(args[0]!);
-  return null;
+  return makeNone(vm.heap);
 };
 
 const random: NativeCallback = (_vm, _receiver, args) => {
@@ -150,7 +150,7 @@ const choice: NativeCallback = (vm, _receiver, args) => {
   return items[below(items.length)]!;
 };
 
-const shuffle: NativeCallback = (_vm, _receiver, args) => {
+const shuffle: NativeCallback = (vm, _receiver, args) => {
   expectArguments(args, "shuffle", 1, 1);
   const target = args[0]!;
   if (typeof target !== "object" || target === null || target.kind !== "list") {
@@ -163,7 +163,7 @@ const shuffle: NativeCallback = (_vm, _receiver, args) => {
     items[index] = items[other]!;
     items[other] = held;
   }
-  return null;
+  return makeNone(vm.heap);
 };
 
 const sample: NativeCallback = (vm, _receiver, args) => {
@@ -195,15 +195,3 @@ registerBuiltinModule("random", {
   functions: { seed, random, randint, randrange, uniform, gauss, getrandbits, choice, choices, shuffle, sample },
 });
 
-const my:NativeCallback = (_vm,re,args)=>{
-  let v;
-  if (args[0] === undefined){
-    v = "none"
-  }else {
-    v = String(args[0])
-  }
-  return null
-}
-registerBuiltinModule("my",{
-  functions:{my}
-})

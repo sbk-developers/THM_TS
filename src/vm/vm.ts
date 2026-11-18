@@ -1,6 +1,7 @@
 import type { Chunk, Instruction } from "../compiler/bytecode/bytecode.js";
 import { compile } from "../compiler.js";
 import { parse } from "../parser/parser.js";
+import os from "node:os";
 import {
   ThmImportError,
   RuntimeError,
@@ -33,6 +34,7 @@ import {
   makeCoroutine,
   makeDescriptor,
   makeException,
+  makeGenerator,
   makeInstance,
   makeSuper,
   makeFunction,
@@ -56,6 +58,7 @@ import {
   type FunctionParameterSpec,
   type IteratorState,
   type IteratorValue,
+  type GeneratorValue,
   type ListValue,
   type NativeValue,
   type RangeValue,
@@ -65,6 +68,8 @@ import {
   type BytesValue,
   type Value,
 } from "../runtime/values.js";
+
+const libdir = os.platform() === "win32" ? "C:\\Program Files\\THM\\Lib\\" : "/usr/local/lib/thm/lib/";
 
 interface Frame {
   chunk: Chunk;
@@ -76,6 +81,7 @@ interface Frame {
   ownerClass?: ClassValue;
   callerInstructionIndex?: number;
   currentException?: ExceptionValue;
+  generator?: GeneratorValue;
 }
 
 interface Comparison {
@@ -97,6 +103,7 @@ interface FunctionCreationMetadata {
   parameters: FunctionParameterSpec[];
   defaults: number;
   isAsync: boolean;
+  isGenerator: boolean;
 }
 
 class ThmRaisedException extends Error {
@@ -155,9 +162,10 @@ export class VM {
   constructor(
     readonly platform: Platform,
     readonly recursionLimit = 1000,
+    moduleSearchPaths: string[] = [],
   ) {
     this.moduleResult = makeNone(this.heap);
-    this.moduleResolver = new ModuleResolver(platform);
+    this.moduleResolver = new ModuleResolver(platform, moduleSearchPaths);
     if (!Number.isInteger(recursionLimit) || recursionLimit < 1) {
       throw new ThmValueError("recursion limit must be a positive integer");
     }
@@ -612,6 +620,24 @@ export class VM {
       case "ITER":
         this.stack.push(this.toIterator(this.pop()));
         return;
+      case "YIELD": {
+        // Suspend the generator frame: pop it, hand the yielded value back to
+        // the resuming iterator, and keep the environment alive on the
+        // generator object for the next resume.
+        const generatorFrame = this.frames.pop()!;
+        const value = this.pop();
+        const generator = generatorFrame.generator;
+        if (generator === undefined) {
+          throw new RuntimeError("YIELD outside a generator frame");
+        }
+        if (this.stack.length < generatorFrame.stackBase) {
+          throw new RuntimeError("Generator yielded with an unbalanced operand stack");
+        }
+        this.stack.length = generatorFrame.stackBase;
+        generator.frame = generatorFrame;
+        generator.pendingValue = value;
+        return;
+      }
       case "ITER_NEXT": {
         const iterator = this.peek();
         if (!isKind(iterator, "iterator")) throw new ThmTypeError("invalid iterator on VM stack");
@@ -637,6 +663,7 @@ export class VM {
           metadata.parameters,
           defaults,
           metadata.isAsync,
+          metadata.isGenerator,
         ));
         return;
       }
@@ -735,6 +762,10 @@ export class VM {
           parseCallArgumentSpecs(instruction.text, values.length),
         );
         if (isKind(callee, "function")) {
+          if (callee.isGenerator) {
+            this.stack.push(makeGenerator(this.heap, callee.name, callee, [...args], new Map(keywords)));
+            return;
+          }
           this.callFunctionValue(callee, args, keywords);
           return;
         }
@@ -910,6 +941,16 @@ export class VM {
     }
   }
 
+  /** Current module search paths as a THM list (cwd, configured extras, lib). */
+  moduleSearchPaths(): Value {
+    const cwd = this.platform.cwd();
+    return makeList(this.heap, [
+      cwd,
+      cwd + "/lib",
+      libdir
+    ]);
+  }
+
   private moduleForEnvironment(environment: Environment): ModuleValue | undefined {
     let current: Environment | null = environment;
     while (current !== null) {
@@ -922,6 +963,13 @@ export class VM {
   private returnFromFrame(value: Value): void {
     const frame = this.frames.pop();
     if (frame === undefined) throw new RuntimeError("RETURN without a frame");
+    if (frame.generator !== undefined) {
+      // Generator completing after its last yield: mark it exhausted instead
+      // of returning to a caller frame.
+      frame.generator.done = true;
+      frame.generator.frame = null;
+      return;
+    }
     if (this.stack.length !== frame.stackBase) {
       throw new RuntimeError(`Stack was not restored when returning from ${frame.chunk.name}`);
     }
@@ -3077,6 +3125,9 @@ if (isKind(receiver, "descriptor")) {
 
   private toIterator(value: Value, dictMode: "keys" | "values" | "items" = "keys"): IteratorValue {
     if (isKind(value, "iterator")) return value;
+    if (isKind(value, "generator")) {
+      return makeIterator(this.heap, { kind: "generator", source: value });
+    }
     if (isKind(value, "list") || isKind(value, "tuple")) {
       return makeIterator(this.heap, { kind: "sequence", source: value, index: 0, step: 1 });
     }
@@ -3166,7 +3217,59 @@ if (isKind(receiver, "descriptor")) {
         if (state.index < 0) return { done: true };
         return { done: false, value: state.source[state.index--]! };
       }
+      case "generator":
+        return this.advanceGenerator(state.source);
     }
+    throw new RuntimeError("Unknown iterator state");
+  }
+
+  /** Drive a generator function one step: start or resume its frame until it
+   *  yields again or completes. */
+  private advanceGenerator(generator: GeneratorValue): { done: true } | { done: false; value: Value } {
+    if (generator.done) return { done: true };
+    if (generator.error !== undefined) throw generator.error;
+
+    if (!generator.started) {
+      generator.started = true;
+      this.pushGeneratorFrame(generator);
+    } else {
+      // Resume: put the saved frame back on the stack.
+      this.frames.push(generator.frame);
+      generator.frame = null;
+    }
+
+    const depth = this.frames.length - 1;
+    try {
+      this.executeUntil(depth);
+    } catch (error) {
+      generator.done = true;
+      generator.error = error;
+      throw error;
+    }
+
+    if (generator.pendingValue !== undefined) {
+      const value = generator.pendingValue;
+      generator.pendingValue = undefined;
+      return { done: false, value };
+    }
+    // Frame completed without yielding (RETURN/HALT).
+    generator.done = true;
+    if (generator.error !== undefined) throw generator.error;
+    return { done: true };
+  }
+
+  private pushGeneratorFrame(generator: GeneratorValue): void {
+    const fn = generator.fn;
+    const environment = this.bindFunction(fn, generator.args, generator.keywords);
+    this.frames.push({
+      chunk: fn.chunk,
+      instructionPointer: 0,
+      stackBase: this.stack.length,
+      environment,
+      module: this.moduleForEnvironment(environment),
+      generator,
+    });
+    generator.frame = null;
   }
 
   iterateAll(value: Value): Value[] {
@@ -3396,6 +3499,7 @@ function parseFunctionCreationMetadata(
       parameters: parameterNames.map((name) => ({ name, kind: "positional", hasDefault: false })),
       defaults: 0,
       isAsync: false,
+      isGenerator: false,
     };
   }
   let value: unknown;
@@ -3438,7 +3542,12 @@ function parseFunctionCreationMetadata(
   ) {
     throw new RuntimeError("Malformed function parameter metadata");
   }
-  return { parameters, defaults: record.defaults as number, isAsync: record.isAsync === true };
+  return {
+    parameters,
+    defaults: record.defaults as number,
+    isAsync: record.isAsync === true,
+    isGenerator: record.isGenerator === true,
+  };
 }
 
 function parseCallArgumentSpecs(text: string | undefined, count: number): CallArgumentSpec[] {

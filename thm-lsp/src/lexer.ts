@@ -36,6 +36,8 @@ export const KEYWORDS: readonly string[] = [
   "and",
   "as",
   "assert",
+  "async",
+  "await",
   "break",
   "class",
   "continue",
@@ -61,10 +63,12 @@ export const KEYWORDS: readonly string[] = [
   "return",
   "try",
   "while",
+  "yield",
 ];
 
 const OPERATORS: readonly string[] = [
   "**=",
+  ":=",
   "//=",
   "<<=",
   ">>=",
@@ -98,6 +102,7 @@ const OPERATORS: readonly string[] = [
   "|",
   "^",
   "~",
+  "!",
   "(",
   ")",
   "[",
@@ -110,6 +115,12 @@ const OPERATORS: readonly string[] = [
   ";",
   "@",
 ];
+
+const CONTINUING = new Set([
+  ",", ":", ".", ":=", "=", "+", "-", "*", "/", "//", "%", "**", "<<", ">>",
+  "==", "!=", "<", "<=", ">", ">=", "+=", "-=", "*=", "/=", "//=", "%=", "**=",
+  "&", "|", "^", "&=", "|=", "^=", "<<=", ">>=", "->", "and", "or", "not", "is", "in",
+]);
 
 const TWO_CHAR_QUOTE_PREFIXES = new Set(["rb", "br", "fr", "rf"]);
 const ONE_CHAR_PREFIXES = new Set(["r", "b", "f"]);
@@ -276,7 +287,20 @@ export function tokenize(source: string): Token[] {
       continue;
     }
     if (char === "\n") {
-      const wasOpen = state.parenDepth > 0;
+      // Mirror the real tokenizer: newlines are insignificant inside ( ) and
+      // [ ] (but NOT inside { } blocks) and after continuing operators.
+      let previous: Token | undefined;
+      for (let back = state.tokens.length - 1; back >= 0; back--) {
+        if (state.tokens[back].kind !== "comment") {
+          previous = state.tokens[back];
+          break;
+        }
+      }
+      const wasOpen =
+        state.parenDepth > 0 ||
+        (previous !== undefined &&
+          (previous.kind === "operator" || previous.kind === "keyword") &&
+          CONTINUING.has(previous.value));
       advance(state);
       if (!wasOpen)
         state.tokens.push({
@@ -307,8 +331,8 @@ export function tokenize(source: string): Token[] {
       atLineStart = false;
       // (Indent tracking is intentionally omitted; THM is brace-based.)
     }
-    if (char === "(" || char === "[" || char === "{") state.parenDepth++;
-    if (char === ")" || char === "]" || char === "}")
+    if (char === "(" || char === "[") state.parenDepth++;
+    if (char === ")" || char === "]")
       state.parenDepth = Math.max(0, state.parenDepth - 1);
     if (char === '"' || char === "'") {
       lexString(state, "");

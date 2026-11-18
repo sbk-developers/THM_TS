@@ -18,6 +18,8 @@ exports.KEYWORDS = [
     "and",
     "as",
     "assert",
+    "async",
+    "await",
     "break",
     "class",
     "continue",
@@ -43,9 +45,11 @@ exports.KEYWORDS = [
     "return",
     "try",
     "while",
+    "yield",
 ];
 const OPERATORS = [
     "**=",
+    ":=",
     "//=",
     "<<=",
     ">>=",
@@ -79,6 +83,7 @@ const OPERATORS = [
     "|",
     "^",
     "~",
+    "!",
     "(",
     ")",
     "[",
@@ -91,6 +96,11 @@ const OPERATORS = [
     ";",
     "@",
 ];
+const CONTINUING = new Set([
+    ",", ":", ".", ":=", "=", "+", "-", "*", "/", "//", "%", "**", "<<", ">>",
+    "==", "!=", "<", "<=", ">", ">=", "+=", "-=", "*=", "/=", "//=", "%=", "**=",
+    "&", "|", "^", "&=", "|=", "^=", "<<=", ">>=", "->", "and", "or", "not", "is", "in",
+]);
 const TWO_CHAR_QUOTE_PREFIXES = new Set(["rb", "br", "fr", "rf"]);
 const ONE_CHAR_PREFIXES = new Set(["r", "b", "f"]);
 /** True when the identifier is a reserved THM keyword. */
@@ -226,7 +236,19 @@ function tokenize(source) {
             continue;
         }
         if (char === "\n") {
-            const wasOpen = state.parenDepth > 0;
+            // Mirror the real tokenizer: newlines are insignificant inside ( ) and
+            // [ ] (but NOT inside { } blocks) and after continuing operators.
+            let previous;
+            for (let back = state.tokens.length - 1; back >= 0; back--) {
+                if (state.tokens[back].kind !== "comment") {
+                    previous = state.tokens[back];
+                    break;
+                }
+            }
+            const wasOpen = state.parenDepth > 0 ||
+                (previous !== undefined &&
+                    (previous.kind === "operator" || previous.kind === "keyword") &&
+                    CONTINUING.has(previous.value));
             advance(state);
             if (!wasOpen)
                 state.tokens.push({
@@ -257,9 +279,9 @@ function tokenize(source) {
             atLineStart = false;
             // (Indent tracking is intentionally omitted; THM is brace-based.)
         }
-        if (char === "(" || char === "[" || char === "{")
+        if (char === "(" || char === "[")
             state.parenDepth++;
-        if (char === ")" || char === "]" || char === "}")
+        if (char === ")" || char === "]")
             state.parenDepth = Math.max(0, state.parenDepth - 1);
         if (char === '"' || char === "'") {
             lexString(state, "");

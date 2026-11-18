@@ -30,11 +30,20 @@ function serveStdio(sink) {
                 return;
             const body = buffer.slice(bodyStart, bodyStart + contentLength).toString("utf8");
             buffer = buffer.slice(bodyStart + contentLength);
+            let parsed;
             try {
-                sink.onMessage(JSON.parse(body));
+                parsed = JSON.parse(body);
             }
             catch (error) {
                 console.error(`[thm-lsp] bad message: ${String(error)}`);
+                continue;
+            }
+            try {
+                if (parsed !== undefined)
+                    sink.onMessage(parsed);
+            }
+            catch (error) {
+                console.error(`[thm-lsp] handler error: ${error instanceof Error ? error.stack : String(error)}`);
             }
         }
     };
@@ -43,5 +52,6 @@ function serveStdio(sink) {
         tryExtract();
     });
     process.stdin.on("end", () => process.exit(0));
+    process.stdin.on("close", () => process.exit(0));
     process.stdin.resume();
 }

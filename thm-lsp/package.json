@@ -1,8 +1,8 @@
 {
   "name": "thm-lsp",
-  "version": "0.1.0",
+  "version": "0.4.0",
   "private": true,
-  "description": "Language Server Protocol implementation for the THM scripting language",
+  "description": "THM 0.4.0 LSP with AST type checker, CFG and data-flow analysis",
   "main": "out/cli.js",
   "bin": {
     "thm-lsp": "out/cli.js"
@@ -10,13 +10,18 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node out/cli.js --stdio",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node tests/e2e.mjs && node tests/type-system.mjs"
   },
   "devDependencies": {
-    "@types/node": "^24.19.2",
-    "typescript": "^5.9.3"
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
   },
   "engines": {
     "node": ">=18"
+  },
+  "dependencies": {
+    "@types/vscode": "^1.146.0",
+    "@vscode/vsce": "^3.9.2",
+    "vscode-languageclient": "^9.0.1"
   }
 }

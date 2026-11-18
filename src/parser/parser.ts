@@ -130,6 +130,7 @@ export class Parser {
       kind: "function",
       name: name.value,
       isAsync,
+      isGenerator: this.blockContainsYield(body),
       typeParameters,
       parameters,
       returnAnnotation,
@@ -304,7 +305,7 @@ export class Parser {
     return parts.join(" ");
   }
 
-  private parseBlock(context: string): Statement[] {
+  private parseBlock(context = "a block"): Statement[] {
     this.skipNewlines();
     if (!this.check("{")) {
       const token = this.peek();
@@ -972,6 +973,105 @@ export class Parser {
 
   private error(message: string): SyntaxError {
     return new SyntaxError(message, this.peek());
+  }
+
+  /** Whether any direct (non-nested-function) statement in the block yields. */
+  private blockContainsYield(statements: Statement[]): boolean {
+    for (const statement of statements) {
+      if (this.statementContainsYield(statement)) return true;
+    }
+    return false;
+  }
+
+  private statementContainsYield(statement: Statement): boolean {
+    switch (statement.kind) {
+      case "expression":
+        return this.expressionContainsYield(statement.expression);
+      case "assign":
+        return statement.targets.some((target) => this.expressionContainsYield(target))
+          || this.expressionContainsYield(statement.value);
+      case "augmentedAssign":
+        return this.expressionContainsYield(statement.target) || this.expressionContainsYield(statement.value);
+      case "annotate":
+        return statement.value !== undefined && this.expressionContainsYield(statement.value);
+      case "return":
+      case "raise":
+        return statement.value !== undefined && this.expressionContainsYield(statement.value);
+      case "if":
+        return this.expressionContainsYield(statement.condition)
+          || this.blockContainsYield(statement.body)
+          || this.blockContainsYield(statement.otherwise);
+      case "while":
+        return this.expressionContainsYield(statement.condition)
+          || this.blockContainsYield(statement.body)
+          || this.blockContainsYield(statement.otherwise);
+      case "for":
+        return this.expressionContainsYield(statement.iterable)
+          || this.blockContainsYield(statement.body)
+          || this.blockContainsYield(statement.otherwise);
+      case "try":
+        return this.blockContainsYield(statement.body)
+          || statement.handlers.some((handler) => this.blockContainsYield(handler.body))
+          || this.blockContainsYield(statement.otherwise)
+          || this.blockContainsYield(statement.finalBody);
+      case "delete":
+        return statement.targets.some((target) => this.expressionContainsYield(target));
+      case "assert":
+        return this.expressionContainsYield(statement.condition)
+          || (statement.message !== undefined && this.expressionContainsYield(statement.message));
+      default:
+        return false;
+    }
+  }
+
+  private expressionContainsYield(expression: Expr): boolean {
+    switch (expression.kind) {
+      case "yield":
+        return true;
+      case "literal":
+      case "bytes":
+      case "name":
+        return false;
+      case "tuple":
+      case "list":
+      case "set":
+        return expression.items.some((item) => this.expressionContainsYield(item));
+      case "dict":
+        return expression.items.some(([key, value]) =>
+          this.expressionContainsYield(key) || this.expressionContainsYield(value));
+      case "unary":
+        return this.expressionContainsYield(expression.operand);
+      case "binary":
+        return this.expressionContainsYield(expression.left) || this.expressionContainsYield(expression.right);
+      case "compare":
+        return this.expressionContainsYield(expression.first)
+          || expression.rest.some((item) => this.expressionContainsYield(item.right));
+      case "conditional":
+        return this.expressionContainsYield(expression.whenTrue)
+          || this.expressionContainsYield(expression.condition)
+          || this.expressionContainsYield(expression.whenFalse);
+      case "await":
+      case "attribute":
+      case "index":
+        return this.expressionContainsYield((expression as { value?: Expr; receiver: Expr }).value
+          ?? (expression as { receiver: Expr }).receiver);
+      case "slice":
+        return this.expressionContainsYield(expression.receiver)
+          || [expression.start, expression.stop, expression.step].some(
+            (part) => part !== undefined && this.expressionContainsYield(part));
+      case "fstring":
+        return expression.parts.some((part) => typeof part !== "string" && this.expressionContainsYield(part));
+      case "call":
+        return this.expressionContainsYield(expression.callee)
+          || expression.args.some((argument) => this.expressionContainsYield(argument.value));
+      case "comprehension":
+        return expression.clauses.some((clause) =>
+          this.expressionContainsYield(clause.iterable) || clause.filters.some((filter) => this.expressionContainsYield(filter)))
+          || (expression.key !== undefined && this.expressionContainsYield(expression.key))
+          || (expression.element !== undefined && this.expressionContainsYield(expression.element));
+      case "lambda":
+        return false;
+    }
   }
 }
 

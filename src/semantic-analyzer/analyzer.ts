@@ -15,6 +15,7 @@ export interface ScopeOptions {
   parameters: string[];
   enclosingNames: ReadonlySet<string>;
   allowAwait?: boolean;
+  allowYield?: boolean;
 }
 
 export function analyzeScope(statements: Statement[], options: ScopeOptions): ScopeAnalysis {
@@ -43,7 +44,7 @@ export function analyzeScope(statements: Statement[], options: ScopeOptions): Sc
   validateControlStatements(statements, options.isFunction);
   const awaitAllowed = Boolean(options.allowAwait);
   validateAwaitInStatements(statements, awaitAllowed);
-  validateYieldInStatements(statements, options.isFunction);
+  validateYieldInStatements(statements, options.isFunction, options.allowYield === true);
   collectCapturesInStatements(statements, symbols);
 
   analyzeChildScopes(statements, new Set([...options.enclosingNames, ...symbols.locals]), awaitAllowed);
@@ -68,6 +69,7 @@ function analyzeChildScopes(
         parameters: statement.parameters.map((parameter) => parameter.name),
         enclosingNames,
         allowAwait: statement.isAsync,
+        allowYield: statement.isGenerator,
       });
     } else if (statement.kind === "class") {
       analyzeScope(statement.body, {
@@ -368,11 +370,12 @@ function validateAwaitInStatements(statements: Statement[], allowAwait: boolean)
   }
 }
 
-function validateYieldInStatements(statements: Statement[], inFunction: boolean): void {
+function validateYieldInStatements(statements: Statement[], inFunction: boolean, allowYield: boolean): void {
   const visitExpression = (expression: Expr): void => {
     switch (expression.kind) {
       case "yield":
         if (!inFunction) throw new SyntaxError("yield outside function", expression);
+        if (!allowYield) throw new SyntaxError("yield inside a non-generator function", expression);
         if (expression.value !== undefined) visitExpression(expression.value);
         return;
       case "await":
@@ -490,6 +493,6 @@ function validateYieldInStatements(statements: Statement[], inFunction: boolean)
       case "scope":
         break;
     }
-    for (const child of nestedStatements(statement)) validateYieldInStatements([child], inFunction);
+    for (const child of nestedStatements(statement)) validateYieldInStatements([child], inFunction, allowYield);
   }
 }

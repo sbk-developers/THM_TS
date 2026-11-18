@@ -1,0 +1,59 @@
+{
+  "name": "thm-lsp",
+  "displayName": "THM Language Support",
+  "version": "0.4.0",
+  "description": "THM 0.4.0 language server with AST type checker, CFG and data-flow analysis",
+  "publisher": "thm",
+  "license": "MIT",
+  "main": "./extension.js",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [],
+  "contributes": {
+    "languages": [
+      {
+        "id": "thm",
+        "aliases": [
+          "THM",
+          "thm"
+        ],
+        "extensions": [
+          ".thm"
+        ]
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "THM Language Server",
+      "properties": {
+        "thm-lsp.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces communication between VS Code and the THM language server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.4.0",
+    "@vscode/vsce": "^3.0.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

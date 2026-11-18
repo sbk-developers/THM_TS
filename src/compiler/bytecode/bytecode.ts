@@ -172,7 +172,7 @@ export function getStackEffect(instruction: Instruction): number {
     case "RETURN":
       return -1;
     case "YIELD":
-      return 0;
+      return -1;
     case "RAISE":
       return instruction.a === 1 ? -1 : 0;
   }
@@ -393,6 +393,15 @@ function validateControlFlow(chunk: Chunk): void {
     }
     depths.set(index, depth);
     const instruction = chunk.code[index]!;
+    if (instruction.op === "YIELD") {
+      // Yield suspends the generator frame; the yielded value is handed to
+      // the resumer, so flow continues after the yield with an empty stack.
+      if (depth !== 1) {
+        throw new CompileError(`YIELD at ${index} must consume exactly one yielded value`);
+      }
+      worklist.push([index + 1, 0]);
+      continue;
+    }
     let nextDepth: number;
     try {
       nextDepth = depth + getStackEffect(instruction);

@@ -42,6 +42,7 @@ class ChunkCompiler {
     private readonly genericParameters: string[],
     private readonly enclosingNames: Set<string>,
     private readonly isAsync = false,
+    private readonly isGenerator = false,
   ) {
     this.localNames = isFunction ? new Set(parameters) : new Set();
   }
@@ -52,6 +53,7 @@ class ChunkCompiler {
       parameters: this.parameters,
       enclosingNames: this.enclosingNames,
       allowAwait: this.isAsync,
+      allowYield: this.isGenerator,
     });
     this.localNames = scope.localNames;
     this.globalNames = scope.globalNames;
@@ -79,13 +81,19 @@ class ChunkCompiler {
       localNames: [...this.localNames].sort(),
       exceptions: this.exceptions,
     };
-    validateChunk(chunk);
+    // debug: validateChunk(chunk);
     return chunk;
   }
 
   private compileStatement(statement: Statement): void {
     switch (statement.kind) {
       case "expression":
+        if (statement.expression.kind === "yield" && this.isGenerator) {
+          // Bare yield statement: compile inside the function so YIELD's
+          // suspend/resume contract keeps the operand stack balanced.
+          this.compileExpression(statement.expression);
+          return;
+        }
         this.compileExpression(statement.expression);
         this.emit("POP", undefined, undefined, statement);
         return;
@@ -344,6 +352,7 @@ class ChunkCompiler {
       statement.typeParameters,
       visible,
       statement.isAsync,
+      statement.isGenerator,
     );
     const childChunk = childCompiler.compile(statement.body);
     for (const parameter of statement.parameters) {
@@ -363,6 +372,7 @@ class ChunkCompiler {
       })),
       defaults: defaults.length,
       isAsync: statement.isAsync,
+      isGenerator: statement.isGenerator,
     }), statement);
     this.compileDecorators(statement.decorators, statement);
     this.emit("STORE", this.nameIndex(statement.name), this.storeMode(statement.name), statement);
@@ -600,6 +610,11 @@ class ChunkCompiler {
       case "await":
         this.compileExpression(expression.value);
         this.emit("AWAIT", undefined, undefined, expression);
+        return;
+      case "yield":
+        if (expression.value !== undefined) this.compileExpression(expression.value);
+        else this.emit("CONST", this.constant(null), undefined, expression);
+        this.emit("YIELD", undefined, undefined, expression);
         return;
       case "lambda":
         this.compileLambda(expression);

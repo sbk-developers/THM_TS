@@ -403,13 +403,26 @@ export class CoroutineValue extends ManagedObject {
 export class GeneratorValue extends ManagedObject {
   readonly kind = "generator";
   public done = false;
+  public started = false;
+  public result: Value | null = null;
+  public error: unknown = undefined;
+  public pendingValue: Value | undefined = undefined;
   public frame: any = null;
+  public fn: FunctionValue;
+  public args: Value[];
+  public keywords: ReadonlyMap<string, Value>;
 
   constructor(
     heapId: number,
     readonly name: string,
+    fn: FunctionValue | null = null,
+    args: Value[] = [],
+    keywords: ReadonlyMap<string, Value> = new Map(),
   ) {
     super(heapId);
+    this.fn = fn as FunctionValue;
+    this.args = args;
+    this.keywords = keywords;
   }
 
   references(): ManagedObject[] {
@@ -419,14 +432,35 @@ export class GeneratorValue extends ManagedObject {
       if (this.frame.module) refs.push(this.frame.module);
       if (this.frame.currentException) refs.push(this.frame.currentException);
     }
+    if (this.fn) refs.push(this.fn);
+    refs.push(...managedReferences(this.args));
+    refs.push(...managedReferences([...this.keywords.values()]));
+    if (this.result !== null) refs.push(...managedReferences([this.result]));
     return refs;
   }
 
   clearReferences(): void {
     this.frame = null;
+    this.args.length = 0;
+    this.result = null;
+    this.error = undefined;
   }
 }
 
+
+export type IteratorState =
+  | { kind: "sequence"; source: ListValue | TupleValue; index: number; step: 1 | -1 }
+  | { kind: "string"; source: string; index: number; step: 1 | -1 }
+  | { kind: "range"; source: RangeValue; index: number }
+  | { kind: "dict"; source: DictValue; index: number; size: number; mode: "keys" | "values" | "items" }
+  | { kind: "set"; source: SetValue; index: number; size: number }
+  | { kind: "enumerate"; source: IteratorValue; index: number }
+  | { kind: "zip"; sources: IteratorValue[] }
+  | { kind: "map"; sources: IteratorValue[]; callback: Value }
+  | { kind: "filter"; source: IteratorValue; callback: Value | null }
+  | { kind: "reverse-sequence"; source: ListValue | TupleValue; index: number }
+  | { kind: "reverse-string"; source: string; index: number }
+  | { kind: "generator"; source: GeneratorValue };
 
 export class IteratorValue extends ManagedObject {
   readonly kind = "iterator";
@@ -465,6 +499,7 @@ export type Value =
   | SuperValue
   | ExceptionValue
   | IteratorValue
+  | GeneratorValue
   | CoroutineValue
   | NoneValue;
 
@@ -497,6 +532,7 @@ export function managedReferences(values: Value[]): ManagedObject[] {
     else if (value.kind === "super") refs.push(value);
     else if (value.kind === "exception") refs.push(value);
     else if (value.kind === "iterator") refs.push(value);
+    else if (value.kind === "generator") refs.push(value);
     else if (value.kind === "coroutine") refs.push(value);
   }
   return refs;
@@ -534,8 +570,13 @@ export function makeFunction(
   parameterSpecs: FunctionParameterSpec[],
   defaults: Value[],
   isAsync = false,
+  isGenerator = false,
 ): FunctionValue {
-  return heap.allocate((heapId) => new FunctionValue(heapId, name, chunk, closure, parameterSpecs, defaults, isAsync));
+  return heap.allocate((heapId) => new FunctionValue(heapId, name, chunk, closure, parameterSpecs, defaults, isAsync, isGenerator));
+}
+
+export function makeGenerator(heap: ManagedHeap, name: string, fn: FunctionValue, args: Value[], keywords: ReadonlyMap<string, Value>): GeneratorValue {
+  return heap.allocate((heapId) => new GeneratorValue(heapId, name, fn, args, keywords));
 }
 
 export function makeNative(
@@ -655,5 +696,8 @@ function iteratorReferences(state: IteratorState): ManagedObject[] {
       return state.callback === null
         ? [state.source]
         : [state.source, ...managedReferences([state.callback])];
+    case "generator":
+      return [state.source];
   }
+  throw new Error("Unknown iterator state");
 }

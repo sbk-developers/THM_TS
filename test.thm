@@ -1,15 +1,64 @@
 
 
-import http
 
 
 
 
+design = """ 
 
-def test(a:int=10,b:int=20)-> int {
-    return a + b
-}
+                          *
+                         ***
+                        *****
+                       *******
+                      *********
+                        *****
+                          *
 
-t = test(b=5,a=2)
+        * * * * * * * * * * * * * * * * *
+        *                               *
+        *        H A P P Y   <>         *
+        *                               *
+        * * * * * * * * * * * * * * * * *
 
-write(t)
+          /\\
+         /  \\
+        / <> \\
+       /______\\
+         |  |
+        _|  |_
+
+                      ss ss 
+                   ss       ss 
+                  ss
+                  ss
+                   ss 
+                      ss ss 
+                            ss
+                             ss
+                             ss
+                   ss       ss
+                      ss ss
+                        
+                        
+                          jjjjjjjjjjjjjjjjjjjj
+                                    jj
+                                    jj
+                                    jj
+                                    jj
+                                    jj
+                                    jj
+                                    jj
+                                    jj
+                                    jj
+                                    jj
+                                    jj
+                jj                 jj
+                  jj              jj
+                    jj           jj
+                      jj jj  jj
+
+
+
+"""
+
+write(design)

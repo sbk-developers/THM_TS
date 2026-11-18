@@ -1,40 +1,59 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.uriToPath = exports.pathToUri = exports.ThmLanguageServer = void 0;
+exports.uriToPath = exports.pathToUri = exports.ThmLanguageServer = exports.SERVER_VERSION = void 0;
 /**
- * The THM language server: JSON-RPC method dispatch over the LSP surface.
+ * The THM language server: JSON-RPC dispatch over the LSP surface.
  *
- * Supported capabilities:
- *   - textDocument/completion        (keywords, globals, types, modules, members, kwargs)
- *   - textDocument/hover
- *   - textDocument/definition        (go to definition, incl. into imported module files)
- *   - textDocument/references
- *   - textDocument/rename
- *   - textDocument/documentSymbol
- *   - workspace/symbol
- *   - textDocument/signatureHelp     (built-in + user signatures, **kwargs aware)
- *   - textDocument/diagnostic        (pull diagnostics)
- *   - didOpen/didChange/didClose/didSave lifecycle
+ * Capabilities:
+ *   lifecycle      initialize / initialized / shutdown / exit, multi-root workspaces,
+ *                  incremental sync, file watching, config changes
+ *   diagnostics    push (debounced, versioned) + pull; syntax, names, imports, calls
+ *   navigation     definition, references, documentHighlight, documentSymbol (hierarchical),
+ *                  workspace/symbol, documentLink, foldingRange, selectionRange
+ *   editing        completion (scope/inference aware), signatureHelp, rename (+prepare),
+ *                  codeAction (quick fixes, organize imports), inlayHint
+ *   presentation   hover (markdown + docstrings), semanticTokens (full/range)
  */
 const features_js_1 = require("./features.js");
 const positions_js_1 = require("./positions.js");
+const semantic_js_1 = require("./semantic.js");
 const workspace_js_1 = require("./workspace.js");
 Object.defineProperty(exports, "pathToUri", { enumerable: true, get: function () { return workspace_js_1.pathToUri; } });
 Object.defineProperty(exports, "uriToPath", { enumerable: true, get: function () { return workspace_js_1.uriToPath; } });
+exports.SERVER_VERSION = "0.3.0";
+const ERR = {
+    InvalidRequest: -32600,
+    MethodNotFound: -32601,
+    InternalError: -32603,
+    ServerNotInitialized: -32002,
+};
+class MethodNotFound extends Error {
+}
 class ThmLanguageServer {
     workspace = new workspace_js_1.Workspace();
     features;
+    semantic;
     send;
     log;
+    initialized = false;
+    shuttingDown = false;
+    clientCaps = {};
+    nextRequestId = 1;
+    currentFolders = [];
+    timers = new Map();
+    globalTimer;
+    published = new Set();
     constructor(options) {
         this.send = options.send;
         this.log = options.log;
         this.features = new features_js_1.FeatureProvider(this.workspace);
+        this.semantic = new semantic_js_1.SemanticProvider(this.workspace);
     }
+    // ------------------------------------------------------------------ routing
     handleMessage(message) {
         const { id, method, params } = message;
         if (method === undefined)
-            return; // response to a server->client request
+            return; // response to one of our requests
         if (id === undefined) {
             try {
                 this.handleNotification(method, params);
@@ -44,263 +63,425 @@ class ThmLanguageServer {
             }
             return;
         }
+        if (!this.initialized && method !== "initialize") {
+            return this.fail(id, ERR.ServerNotInitialized, "Server not initialized");
+        }
+        if (this.shuttingDown && method !== "shutdown") {
+            return this.fail(id, ERR.InvalidRequest, "Server is shutting down");
+        }
         try {
             const result = this.handleRequest(method, params);
-            this.send({ jsonrpc: "2.0", id, result });
+            this.send({ jsonrpc: "2.0", id, result: result === undefined ? null : result });
         }
         catch (error) {
-            this.log(`error handling ${method}: ${String(error)}`);
-            this.send({
-                jsonrpc: "2.0",
-                id,
-                error: {
-                    code: -32603,
-                    message: String(error instanceof Error ? error.message : error),
-                },
-            });
+            if (error instanceof semantic_js_1.LspError)
+                return this.fail(id, error.code, error.message);
+            if (error instanceof MethodNotFound)
+                return this.fail(id, ERR.MethodNotFound, error.message);
+            this.log(`error handling ${method}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+            this.fail(id, ERR.InternalError, String(error instanceof Error ? error.message : error));
         }
     }
+    fail(id, code, message) {
+        this.send({ jsonrpc: "2.0", id, error: { code, message } });
+    }
+    // ------------------------------------------------------------ notifications
     handleNotification(method, params) {
         switch (method) {
-            case "initialize": {
-                const rootUri = params?.rootUri;
-                if (rootUri !== undefined)
-                    this.workspace.setRoot(rootUri);
-                else if (params?.workspaceFolders?.[0]?.uri !== undefined)
-                    this.workspace.setRoot(params.workspaceFolders[0].uri);
-                break;
-            }
             case "initialized":
-                break;
+                this.registerWatchers();
+                this.scheduleAll();
+                return;
+            case "exit":
+                process.exit(this.shuttingDown ? 0 : 1);
+                return;
             case "textDocument/didOpen": {
                 const { uri, text, version } = params.textDocument;
                 this.workspace.open(uri, text, version ?? 0);
-                this.publishDiagnostics(uri, text);
-                break;
+                this.publishNow(uri);
+                this.scheduleAll(uri);
+                return;
             }
             case "textDocument/didChange": {
                 const { uri, version } = params.textDocument;
-                let text;
-                for (const change of params.contentChanges) {
-                    // Incremental change (range) support: apply the patch.
+                const current = this.workspace.get(uri);
+                let text = current?.text ?? "";
+                for (const change of params.contentChanges ?? []) {
                     if (change.range !== undefined) {
-                        text = this.applyIncremental(text ?? this.workspace.get(uri)?.text ?? "", change);
+                        const index = new positions_js_1.LineIndex(text);
+                        const start = index.offsetAt(change.range.start.line, change.range.start.character);
+                        const end = index.offsetAt(change.range.end.line, change.range.end.character);
+                        text = text.slice(0, start) + change.text + text.slice(end);
                     }
                     else {
                         text = change.text;
                     }
                 }
-                if (text !== undefined) {
-                    this.workspace.update(uri, text, version ?? 0);
-                    this.publishDiagnostics(uri, text);
-                }
-                break;
+                this.workspace.update(uri, text, version ?? (current?.version ?? 0) + 1);
+                this.schedule(uri, 120);
+                this.scheduleAll(uri);
+                return;
             }
-            case "textDocument/didClose":
-                this.workspace.close(params.textDocument.uri);
-                break;
             case "textDocument/didSave": {
-                const text = params.text;
                 const uri = params.textDocument.uri;
-                if (text !== undefined)
-                    this.workspace.update(uri, text, 0);
-                break;
+                if (typeof params.text === "string")
+                    this.workspace.update(uri, params.text, this.workspace.get(uri)?.version ?? 0);
+                this.workspace.invalidateFiles();
+                this.publishNow(uri);
+                this.scheduleAll(uri);
+                return;
             }
+            case "textDocument/didClose": {
+                const uri = params.textDocument.uri;
+                this.workspace.close(uri);
+                const timer = this.timers.get(uri);
+                if (timer !== undefined)
+                    clearTimeout(timer);
+                this.timers.delete(uri);
+                this.clearDiagnostics(uri);
+                return;
+            }
+            case "workspace/didChangeWatchedFiles":
+                this.workspace.invalidateFiles();
+                this.scheduleAll();
+                return;
+            case "workspace/didChangeWorkspaceFolders": {
+                const removed = new Set((params?.event?.removed ?? []).map((f) => f.uri));
+                const added = (params?.event?.added ?? []).map((f) => f.uri);
+                this.currentFolders = [...this.currentFolders.filter((uri) => !removed.has(uri)), ...added];
+                this.workspace.setRoots(this.currentFolders);
+                this.scheduleAll();
+                return;
+            }
+            case "workspace/didChangeConfiguration":
+            case "$/setTrace":
             case "$/cancelRequest":
-                break;
-            case "exit":
-                process.exit(0);
-                break;
+            case "$/progress":
+                return;
             default:
-                this.log(`unhandled notification ${method}`);
+                if (!method.startsWith("$/"))
+                    this.log(`unhandled notification ${method}`);
         }
     }
-    applyIncremental(text, change) {
-        const start = (0, positions_js_1.offsetToPosition)(text, change.range.start.line, change.range.start.character).offset;
-        const end = (0, positions_js_1.offsetToPosition)(text, change.range.end.line, change.range.end.character).offset;
-        return text.slice(0, start) + change.text + text.slice(end);
-    }
-    publishDiagnostics(uri, text) {
-        const diagnostics = this.features.diagnose(uri).map((diagnostic) => ({
-            range: {
-                start: { line: diagnostic.line, character: diagnostic.character },
-                end: { line: diagnostic.line, character: diagnostic.character + 1 },
+    registerWatchers() {
+        const dynamic = this.clientCaps?.workspace?.didChangeWatchedFiles?.dynamicRegistration === true;
+        if (!dynamic)
+            return;
+        this.send({
+            jsonrpc: "2.0",
+            id: `reg-${this.nextRequestId++}`,
+            method: "client/registerCapability",
+            params: {
+                registrations: [
+                    {
+                        id: "thm-watch",
+                        method: "workspace/didChangeWatchedFiles",
+                        registerOptions: { watchers: [{ globPattern: "**/*.thm" }] },
+                    },
+                ],
             },
-            severity: diagnostic.severity,
-            message: diagnostic.message,
-            source: "thm-lsp",
-        }));
+        });
+    }
+    // -------------------------------------------------------------- diagnostics
+    schedule(uri, delay) {
+        const existing = this.timers.get(uri);
+        if (existing !== undefined)
+            clearTimeout(existing);
+        this.timers.set(uri, setTimeout(() => {
+            this.timers.delete(uri);
+            this.publishNow(uri);
+        }, delay));
+    }
+    /** Re-diagnose the other open documents (imports may have changed). */
+    scheduleAll(except) {
+        if (this.globalTimer !== undefined)
+            clearTimeout(this.globalTimer);
+        this.globalTimer = setTimeout(() => {
+            this.globalTimer = undefined;
+            let count = 0;
+            for (const uri of this.workspace.documents.keys()) {
+                if (uri === except || count++ > 30)
+                    continue;
+                this.publishNow(uri);
+            }
+        }, 400);
+    }
+    publishNow(uri) {
+        const document = this.workspace.get(uri);
+        if (document === undefined)
+            return;
+        let diagnostics = [];
+        try {
+            diagnostics = this.semantic.diagnostics(uri);
+        }
+        catch (error) {
+            this.log(`diagnostics failed for ${uri}: ${error instanceof Error ? error.stack : String(error)}`);
+        }
+        this.published.add(uri);
         this.send({
             jsonrpc: "2.0",
             method: "textDocument/publishDiagnostics",
-            params: { uri, diagnostics },
+            params: { uri, version: document.version, diagnostics },
         });
-        void text;
     }
+    clearDiagnostics(uri) {
+        if (!this.published.delete(uri))
+            return;
+        this.send({ jsonrpc: "2.0", method: "textDocument/publishDiagnostics", params: { uri, diagnostics: [] } });
+    }
+    // ----------------------------------------------------------------- requests
     handleRequest(method, params) {
         const uri = params?.textDocument?.uri ?? "";
         const position = params?.position ?? { line: 0, character: 0 };
         switch (method) {
-            case "initialize":
+            case "initialize": {
+                this.clientCaps = params?.capabilities ?? {};
+                const folders = [];
+                for (const folder of params?.workspaceFolders ?? [])
+                    if (typeof folder?.uri === "string")
+                        folders.push(folder.uri);
+                if (folders.length === 0 && typeof params?.rootUri === "string")
+                    folders.push(params.rootUri);
+                if (folders.length === 0 && typeof params?.rootPath === "string")
+                    folders.push((0, workspace_js_1.pathToUri)(params.rootPath));
+                this.currentFolders = folders;
+                this.workspace.setRoots(folders);
+                this.initialized = true;
                 return {
                     capabilities: {
-                        textDocumentSync: { openClose: true, change: 1 }, // incremental
+                        textDocumentSync: { openClose: true, change: 2, save: { includeText: false } },
                         hoverProvider: true,
                         definitionProvider: true,
+                        declarationProvider: true,
+                        typeDefinitionProvider: true,
                         referencesProvider: true,
+                        documentHighlightProvider: true,
                         documentSymbolProvider: true,
                         workspaceSymbolProvider: true,
-                        renameProvider: true,
-                        completionProvider: {
-                            triggerCharacters: [".", "="],
-                            resolveProvider: false,
+                        renameProvider: { prepareProvider: true },
+                        foldingRangeProvider: true,
+                        selectionRangeProvider: true,
+                        documentLinkProvider: { resolveProvider: false },
+                        inlayHintProvider: { resolveProvider: false },
+                        completionProvider: { triggerCharacters: [".", "=", " "], resolveProvider: false },
+                        signatureHelpProvider: { triggerCharacters: ["(", ","], retriggerCharacters: [","] },
+                        codeActionProvider: { codeActionKinds: ["quickfix", "source.organizeImports", "refactor", "refactor.extract", "refactor.inline", "refactor.rewrite"] },
+                        semanticTokensProvider: {
+                            legend: {
+                                tokenTypes: [...semantic_js_1.SEMANTIC_TOKEN_TYPES],
+                                tokenModifiers: [...semantic_js_1.SEMANTIC_TOKEN_MODIFIERS],
+                            },
+                            full: true,
+                            range: true,
                         },
-                        signatureHelpProvider: { triggerCharacters: ["(", ","] },
                         diagnosticProvider: {
-                            interFileDependencies: false,
+                            identifier: "thm",
+                            interFileDependencies: true,
                             workspaceDiagnostics: false,
                         },
+                        workspace: {
+                            workspaceFolders: { supported: true, changeNotifications: true },
+                        },
                     },
-                    serverInfo: { name: "thm-lsp", version: "0.1.0" },
+                    serverInfo: { name: "thm-lsp", version: exports.SERVER_VERSION },
                 };
+            }
             case "shutdown":
+                this.shuttingDown = true;
+                for (const timer of this.timers.values())
+                    clearTimeout(timer);
+                this.timers.clear();
+                if (this.globalTimer !== undefined)
+                    clearTimeout(this.globalTimer);
                 return null;
-            case "textDocument/completion": {
-                const items = this.features.completion(uri, position.line, position.character);
-                return { isIncomplete: false, items };
+            case "textDocument/completion":
+                return this.completion(uri, position);
+            case "completionItem/resolve":
+                return params;
+            case "textDocument/hover":
+                return this.hover(uri, position);
+            case "textDocument/definition":
+            case "textDocument/declaration":
+            case "textDocument/typeDefinition": {
+                const locations = this.semantic.definition(uri, position);
+                return locations.length === 0 ? null : locations;
             }
-            case "textDocument/hover": {
-                const hover = this.features.hover(uri, position.line, position.character);
-                if (hover === null)
-                    return null;
-                return {
-                    contents: {
-                        kind: "markdown",
-                        value: "```thm\n" + hover.contents + "\n```",
-                    },
-                };
-            }
-            case "textDocument/definition": {
-                const locations = this.features.definition(uri, position.line, position.character);
-                if (locations.length === 0)
-                    return null;
-                return locations.map((location) => ({
-                    uri: location.uri,
-                    range: {
-                        start: { line: location.line, character: location.character },
-                        end: { line: location.line, character: location.character + 1 },
-                    },
-                }));
-            }
-            case "textDocument/references": {
-                const locations = this.features.references(uri, position.line, position.character, params?.context?.includeDeclaration ?? true);
-                return locations.map((location) => ({
-                    uri: location.uri,
-                    range: {
-                        start: { line: location.line, character: location.character },
-                        end: { line: location.line, character: location.character + 1 },
-                    },
-                }));
-            }
-            case "textDocument/rename": {
-                const result = this.features.rename(uri, position.line, position.character, params?.newName ?? "");
-                if (result === null)
-                    return null;
-                return {
-                    changes: Object.fromEntries(Object.entries(result.changes).map(([editUri, edits]) => [
-                        editUri,
-                        edits.map((edit) => ({
-                            range: {
-                                start: { line: edit.line, character: edit.character },
-                                end: { line: edit.line, character: edit.character + 1 },
-                            },
-                            newText: params.newName,
-                        })),
-                    ])),
-                };
-            }
-            case "textDocument/documentSymbol": {
-                const symbols = this.features.documentSymbols(uri);
-                return symbols.map((symbol) => ({
-                    name: symbol.name,
-                    kind: symbol.kind,
-                    detail: symbol.detail,
-                    range: {
-                        start: {
-                            line: symbol.range.line,
-                            character: symbol.range.character,
-                        },
-                        end: {
-                            line: symbol.range.line,
-                            character: symbol.range.character + 1,
-                        },
-                    },
-                    selectionRange: {
-                        start: {
-                            line: symbol.range.line,
-                            character: symbol.range.character,
-                        },
-                        end: {
-                            line: symbol.range.line,
-                            character: symbol.range.character + 1,
-                        },
-                    },
-                }));
-            }
-            case "workspace/symbol": {
-                const symbols = this.features.workspaceSymbols(params?.query ?? "");
-                return symbols.map((symbol) => ({
-                    name: symbol.name,
-                    kind: symbol.kind,
-                    location: {
-                        uri: symbol.uri,
-                        range: {
-                            start: { line: symbol.line, character: symbol.character },
-                            end: { line: symbol.line, character: symbol.character + 1 },
-                        },
-                    },
-                }));
-            }
-            case "textDocument/signatureHelp": {
-                const help = this.features.signatureHelp(uri, position.line, position.character);
-                if (help.signature === null)
-                    return { signatures: [], activeSignature: 0, activeParameter: 0 };
-                return {
-                    signatures: [
-                        {
-                            label: help.signature.label,
-                            parameters: help.signature.parameters,
-                            documentation: help.signature.documentation,
-                        },
-                    ],
-                    activeSignature: 0,
-                    activeParameter: help.activeParameter,
-                };
-            }
-            case "textDocument/diagnostic": {
-                const diagnostics = this.features.diagnose(uri).map((diagnostic) => ({
-                    range: {
-                        start: { line: diagnostic.line, character: diagnostic.character },
-                        end: { line: diagnostic.line, character: diagnostic.character + 1 },
-                    },
-                    severity: diagnostic.severity,
-                    message: diagnostic.message,
-                    source: "thm-lsp",
-                }));
-                return { kind: "full", items: diagnostics };
-            }
-            // Custom LSP extensions for extra THM feature access.
+            case "textDocument/references":
+                return this.semantic.references(uri, position, params?.context?.includeDeclaration ?? true);
+            case "textDocument/documentHighlight":
+                return this.semantic.documentHighlights(uri, position);
+            case "textDocument/prepareRename":
+                return this.semantic.prepareRename(uri, position);
+            case "textDocument/rename":
+                return this.semantic.rename(uri, position, params?.newName ?? "");
+            case "textDocument/documentSymbol":
+                return this.semantic.documentSymbols(uri);
+            case "workspace/symbol":
+                return this.semantic.workspaceSymbols(params?.query ?? "");
+            case "textDocument/foldingRange":
+                return this.semantic.foldingRanges(uri);
+            case "textDocument/selectionRange":
+                return this.semantic.selectionRanges(uri, params?.positions ?? []);
+            case "textDocument/documentLink":
+                return this.semantic.documentLinks(uri);
+            case "textDocument/inlayHint":
+                return this.semantic.inlayHints(uri, params.range);
+            case "textDocument/semanticTokens/full":
+                return this.semantic.semanticTokens(uri);
+            case "textDocument/semanticTokens/range":
+                return this.semantic.semanticTokens(uri, params.range);
+            case "textDocument/codeAction":
+                return this.semantic.codeActions(uri, params.range, params?.context?.diagnostics ?? []);
+            case "textDocument/signatureHelp":
+                return this.signatureHelp(uri, position);
+            case "textDocument/diagnostic":
+                return { kind: "full", items: this.semantic.diagnostics(uri) };
+            case "workspace/diagnostic":
+                return { items: [] };
             case "thm/kwargSuggestions":
                 return this.features.kwargSuggestions(uri, position.line, position.character);
             default:
-                this.log(`unhandled request ${method}`);
-                throw new Error(`Unhandled request: ${method}`);
+                throw new MethodNotFound(`Method not found: ${method}`);
         }
+    }
+    // ------------------------------------------------------------------- hover
+    hover(uri, position) {
+        const semantic = this.semantic.hover(uri, position);
+        if (semantic !== null)
+            return { contents: { kind: "markdown", value: semantic.contents }, range: semantic.range };
+        const builtin = this.features.hover(uri, position.line, position.character);
+        if (builtin === null)
+            return null;
+        const document = this.workspace.get(uri);
+        const text = builtin.contents.replace(/^thm\n/, "");
+        let range;
+        if (document !== undefined) {
+            const offset = document.lines.offsetAt(position.line, position.character);
+            let start = offset;
+            let end = offset;
+            while (start > 0 && /\w/.test(document.text[start - 1]))
+                start--;
+            while (end < document.text.length && /\w/.test(document.text[end]))
+                end++;
+            range = document.lines.rangeOf(start, end - start);
+        }
+        return {
+            contents: { kind: "markdown", value: "```thm\n" + text + "\n```" },
+            ...(range !== undefined ? { range } : {}),
+        };
+    }
+    // ------------------------------------------------------------ signature help
+    signatureHelp(uri, position) {
+        const help = this.features.signatureHelp(uri, position.line, position.character);
+        if (help.signature === null)
+            return null;
+        return {
+            signatures: [
+                {
+                    label: help.signature.label,
+                    parameters: help.signature.parameters,
+                    documentation: help.signature.documentation,
+                },
+            ],
+            activeSignature: 0,
+            activeParameter: help.activeParameter,
+        };
+    }
+    // -------------------------------------------------------------- completion
+    completion(uri, position) {
+        const document = this.workspace.get(uri);
+        if (document === undefined)
+            return { isIncomplete: false, items: [] };
+        const offset = document.lines.offsetAt(position.line, position.character);
+        const empty = { isIncomplete: false, items: [] };
+        // No completions inside comments or (non-f) strings.
+        for (const comment of document.binding.comments) {
+            if (offset > comment.offset && offset <= comment.offset + comment.length)
+                return empty;
+        }
+        for (const token of document.binding.tokens) {
+            if (token.kind !== "string")
+                continue;
+            if (/^[rRbB]*[fF]/.test(token.value))
+                continue;
+            const quote = /^[A-Za-z]*("""|'''|"|')/.exec(token.value)?.[0].length ?? 1;
+            if (offset >= token.offset + quote && offset < token.offset + token.length)
+                return empty;
+        }
+        const before = document.text.slice(document.lines.lineStart(position.line), offset);
+        const memberMatch = /([A-Za-z_]\w*)\s*\.\s*(\w*)$/.exec(before);
+        const isImportLine = /^\s*(import|from)\b/.test(before);
+        if (memberMatch !== null && !isImportLine) {
+            const members = this.semantic.membersOf(uri, position, memberMatch[1]);
+            if (members !== undefined) {
+                const items = members
+                    .filter((member) => member.name !== "__init__")
+                    .map((member) => ({
+                    label: member.name,
+                    kind: member.kind === "method" || member.kind === "function"
+                        ? features_js_1.COMPLETION_KIND.Method
+                        : member.kind === "class"
+                            ? features_js_1.COMPLETION_KIND.Class
+                            : member.kind === "property"
+                                ? features_js_1.COMPLETION_KIND.Property
+                                : features_js_1.COMPLETION_KIND.Variable,
+                    detail: member.detail,
+                    documentation: member.doc !== undefined ? { kind: "markdown", value: member.doc } : undefined,
+                    sortText: `0_${member.name}`,
+                }));
+                return { isIncomplete: false, items };
+            }
+        }
+        const items = this.features.completion(uri, position.line, position.character);
+        if (memberMatch !== null || isImportLine)
+            return { isIncomplete: false, items };
+        // Replace the name-based local items with scope-aware ones.
+        const completionByName = new Map(items.map((item) => [item.label, item]));
+        const kept = items.filter((item) => !item.sortText?.startsWith("0_"));
+        for (const sym of this.semantic.visibleSymbols(uri, position)) {
+            const richer = completionByName.get(sym.name);
+            if (sym.kind === "exception")
+                continue;
+            kept.push({
+                label: sym.name,
+                kind: sym.kind === "function"
+                    ? features_js_1.COMPLETION_KIND.Function
+                    : sym.kind === "method"
+                        ? features_js_1.COMPLETION_KIND.Method
+                        : sym.kind === "class"
+                            ? features_js_1.COMPLETION_KIND.Class
+                            : sym.kind === "import"
+                                ? features_js_1.COMPLETION_KIND.Module
+                                : sym.kind === "property"
+                                    ? features_js_1.COMPLETION_KIND.Property
+                                    : features_js_1.COMPLETION_KIND.Variable,
+                detail: sym.detail ?? sym.annotation ?? sym.kind,
+                documentation: sym.doc,
+                sortText: `0_${sym.name}`,
+                insertText: richer?.insertText ?? sym.name,
+                insertTextFormat: richer?.insertTextFormat ?? 1,
+                filterText: richer?.filterText ?? sym.name,
+                commitCharacters: richer?.commitCharacters,
+            });
+        }
+        // Workspace-wide auto-import suggestions (functions/classes/variables).
+        const word = /[A-Za-z_]\w*$/.exec(before)?.[0] ?? "";
+        if (word.length >= 2 && !isImportLine) {
+            const importPosition = this.semantic.autoImportPosition(uri);
+            for (const candidate of this.semantic.autoImportCompletions(word, uri)) {
+                if (completionByName.has(candidate.name))
+                    continue;
+                kept.push({
+                    label: candidate.name,
+                    kind: candidate.kind === "class" ? features_js_1.COMPLETION_KIND.Class : candidate.kind === "function" ? features_js_1.COMPLETION_KIND.Function : features_js_1.COMPLETION_KIND.Variable,
+                    detail: `${candidate.detail ?? candidate.kind} · auto import from ${candidate.module}`,
+                    sortText: `2_${candidate.name}`,
+                    filterText: candidate.name,
+                    additionalTextEdits: [{ range: { start: importPosition, end: importPosition }, newText: `from ${candidate.module} import ${candidate.name}\n` }],
+                });
+            }
+        }
+        return { isIncomplete: false, items: kept };
     }
 }
 exports.ThmLanguageServer = ThmLanguageServer;
-/** Internal helper: convert an LSP position into an offset in `text`. */
-function lineColIndex(position, text) {
-    void text;
-    return `${position.line}:${position.character}`;
-}

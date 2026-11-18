@@ -9,7 +9,7 @@ registerBuiltinModule("test_sbk", {
       if (args.length === 1 && typeof args[0] !== "string") {
         throw new ThmTypeError("greet() name must be a string");
       }
-      const name = args.length === 0 ? "world" : args[0];
+      const name = args.length === 0 ? "world" : (args[0] as string);
       return `Hello, ${name}!`;
     },
   },

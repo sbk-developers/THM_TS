@@ -6,6 +6,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import { analyze, type Definition } from "./analyzer.js";
+import { bindDocument, type Binding } from "./binder.js";
+import { LineIndex } from "./positions.js";
 
 export interface WorkspaceDocument {
   uri: string;
@@ -14,6 +16,9 @@ export interface WorkspaceDocument {
   version: number;
   definitions: Definition[];
   isUntitled: boolean;
+  lines: LineIndex;
+  /** Lazily computed scope-aware binding (cached until the text changes). */
+  binding: Binding;
 }
 
 /** Exported symbol surface of an imported THM module. */
@@ -31,14 +36,105 @@ export class Workspace {
   private rootDirs: string[] = [];
 
   setRoot(rootUri: string): void {
-    if (!rootUri.startsWith("file://")) return;
-    const rootPath = uriToPath(rootUri);
-    this.rootDirs = [rootPath, path.join(rootPath, "lib")];
-    if (this.rootFromCwd === undefined) this.rootFromCwd = rootPath;
+    this.setRoots([rootUri]);
+  }
+
+  /** Configure all workspace folders (multi-root aware). */
+  setRoots(rootUris: string[]): void {
+    const folders = rootUris.filter((uri) => uri.startsWith("file://")).map(uriToPath);
+    this.folders = folders;
+    this.rootDirs = folders.flatMap((folder) => [folder, path.join(folder, "lib")]);
+    if (this.rootFromCwd === undefined && folders.length > 0) this.rootFromCwd = folders[0];
+    this.diskCache.clear();
+    this.fileListCache = undefined;
   }
   private rootFromCwd: string | undefined;
+  private folders: string[] = [];
+  private diskCache = new Map<string, { mtime: number; doc: WorkspaceDocument }>();
+  private fileListCache: { at: number; files: string[] } | undefined;
+
+  workspaceFolders(): string[] {
+    return this.folders.length > 0 ? this.folders : [process.cwd()];
+  }
+
+  invalidateFiles(): void {
+    this.fileListCache = undefined;
+    this.diskCache.clear();
+  }
+
+  /** Every .thm file under the workspace folders (cached for a few seconds). */
+  listThmFiles(limit = 4000): string[] {
+    const now = Date.now();
+    if (this.fileListCache !== undefined && now - this.fileListCache.at < 5000) return this.fileListCache.files;
+    const files: string[] = [];
+    const skip = new Set(["node_modules", ".git", "out", "build", "dist", ".venv", "__pycache__"]);
+    const walk = (directory: string, depth: number): void => {
+      if (files.length >= limit || depth > 12) return;
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(directory, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (entry.name.startsWith(".") && entry.name !== ".") continue;
+        const full = path.join(directory, entry.name);
+        if (entry.isDirectory()) {
+          if (!skip.has(entry.name)) walk(full, depth + 1);
+        } else if (entry.name.endsWith(".thm")) files.push(full);
+      }
+    };
+    for (const folder of this.workspaceFolders()) walk(folder, 0);
+    this.fileListCache = { at: now, files };
+    return files;
+  }
+
+  /** Open document by path if open, otherwise parse (and cache) the file on disk. */
+  loadByPath(filePath: string): WorkspaceDocument | undefined {
+    for (const document of this.documents.values()) if (document.filePath === filePath) return document;
+    try {
+      const mtime = fs.statSync(filePath).mtimeMs;
+      const cached = this.diskCache.get(filePath);
+      if (cached !== undefined && cached.mtime === mtime) return cached.doc;
+      const text = fs.readFileSync(filePath, "utf8");
+      const doc = this.build(pathToUri(filePath), text, 0);
+      this.diskCache.set(filePath, { mtime, doc });
+      return doc;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Resolve `import a.b` to a file, looking beside the importer, then the roots. */
+  resolveModuleFile(moduleName: string, fromFile?: string): string | undefined {
+    if (moduleName === "") return undefined;
+    const leading = /^\.+/.exec(moduleName)?.[0].length ?? 0;
+    const parts = moduleName.slice(leading).split(".").filter((part) => part !== "");
+    const roots: string[] = [];
+    if (fromFile !== undefined && fromFile !== "") {
+      let base = path.dirname(fromFile);
+      for (let i = 1; i < leading; i++) base = path.dirname(base);
+      roots.push(base);
+    }
+    if (leading === 0) roots.push(...this.rootDirs);
+    if (roots.length === 0) roots.push(process.cwd());
+    for (const root of roots) {
+      const dir = path.join(root, ...parts);
+      const init = path.join(dir, "__init__.thm");
+      if (fs.existsSync(init)) return init;
+      if (parts.length > 0 && fs.existsSync(`${dir}.thm`)) return `${dir}.thm`;
+      if (parts.length === 0 && leading > 0 && fs.existsSync(init)) return init;
+    }
+    return undefined;
+  }
 
   open(uri: string, text: string, version: number): WorkspaceDocument {
+    const document = this.build(uri, text, version);
+    this.documents.set(uri, document);
+    return document;
+  }
+
+  private build(uri: string, text: string, version: number): WorkspaceDocument {
     const document: WorkspaceDocument = {
       uri,
       filePath: uriToPath(uri),
@@ -48,8 +144,9 @@ export class Workspace {
         (definition) => definition.container === undefined,
       ),
       isUntitled: uri.startsWith("untitled:"),
+      lines: new LineIndex(text),
+      binding: bindDocument(text),
     };
-    this.documents.set(uri, document);
     return document;
   }
 
@@ -228,11 +325,24 @@ function safeReaddir(directory: string): string[] {
 }
 
 export function uriToPath(uri: string): string {
-  let decoded = decodeURIComponent(uri.replace(/^file:\/\//, ""));
-  if (/^\/[A-Za-z]:/.test(decoded)) decoded = decoded.slice(1); // windows drive
+  if (!uri.startsWith("file://")) return uri;
+  let decoded = decodeURIComponent(uri.replace(/^file:\/\/(localhost)?/, ""));
+  if (/^\/[A-Za-z]:/.test(decoded)) {
+    // Windows drive path: /c:/Users/x -> C:\Users\x
+    decoded = decoded.slice(1);
+    decoded = decoded[0].toUpperCase() + decoded.slice(1);
+    return path.win32.normalize(decoded);
+  }
   return decoded;
 }
 
 export function pathToUri(filePath: string): string {
-  return `file://${filePath.split(path.sep).map(encodeURIComponent).join("/")}`;
+  const normalized = filePath.replace(/\\/g, "/");
+  const drive = /^([A-Za-z]):(\/.*)?$/.exec(normalized);
+  if (drive !== null) {
+    const rest = (drive[2] ?? "/").split("/").map(encodeURIComponent).join("/");
+    return `file:///${drive[1].toLowerCase()}%3A${rest}`;
+  }
+  const withSlash = normalized.startsWith("/") ? normalized : `/${normalized}`;
+  return `file://${withSlash.split("/").map(encodeURIComponent).join("/")}`;
 }

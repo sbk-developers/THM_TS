@@ -196,6 +196,18 @@ class FeatureProvider {
         return { callee, argumentIndex };
     }
     // --------------------------------------------------------------- completion
+    /** Build editor-friendly call snippets while preserving optional/variadic args. */
+    functionSnippet(name, parameters) {
+        if (!parameters || parameters.length === 0)
+            return `${name}($0)`;
+        const required = parameters.filter((p) => !p.hasDefault && p.kind !== "kwarg");
+        const chosen = required.length > 0 ? required : parameters.slice(0, 1);
+        const args = chosen.map((p, i) => {
+            const label = p.kind === "vararg" ? `*${p.name}` : p.kind === "kwarg" ? `**${p.name}` : p.name;
+            return `\${${i + 1}:${label}}`;
+        });
+        return `${name}(${args.join(", ")})$0`;
+    }
     completion(uri, line, character) {
         const { text } = this.analysisOf(uri);
         const { lineText } = this.lineAt(text, line);
@@ -226,7 +238,7 @@ class FeatureProvider {
             });
         }
         // 4. Literals.
-        for (const literal of ["true", "false", "null"]) {
+        for (const literal of ["true", "false", "none"]) {
             items.push({
                 label: literal,
                 kind: exports.COMPLETION_KIND.Keyword,
@@ -288,6 +300,12 @@ class FeatureProvider {
                 documentation: definition.detail,
                 sortText: `0_${definition.name}`,
                 data: { name: definition.name, origin: originUri },
+                filterText: definition.name,
+                insertText: definition.kind === "function"
+                    ? this.functionSnippet(definition.name, definition.parameters)
+                    : definition.name,
+                insertTextFormat: definition.kind === "function" ? 2 : 1,
+                commitCharacters: definition.kind === "function" ? ["("] : ["."],
             });
         };
         for (const definition of analysis.definitions)

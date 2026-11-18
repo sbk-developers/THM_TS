@@ -3,3 +3,4 @@ build/
 .scriptc/
 *.thmc
 .DS_Store
+.key

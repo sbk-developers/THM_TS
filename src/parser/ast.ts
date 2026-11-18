@@ -40,7 +40,7 @@ export type Statement =
   | { kind: "assign"; targets: Expr[]; value: Expr; line: number; column: number }
   | { kind: "annotate"; target: Expr; annotation: string; value?: Expr; line: number; column: number }
   | { kind: "augmentedAssign"; target: Expr; operator: string; value: Expr; line: number; column: number }
-  | { kind: "function"; name: string; isAsync: boolean; typeParameters: string[]; parameters: Parameter[]; returnAnnotation?: string; decorators: Expr[]; body: Statement[]; line: number; column: number }
+  | { kind: "function"; name: string; isAsync: boolean; isGenerator: boolean; typeParameters: string[]; parameters: Parameter[]; returnAnnotation?: string; decorators: Expr[]; body: Statement[]; line: number; column: number }
   | { kind: "class"; name: string; typeParameters: string[]; bases: Expr[]; metaclass?: Expr; decorators: Expr[]; body: Statement[]; line: number; column: number }
   | { kind: "if"; condition: Expr; body: Statement[]; otherwise: Statement[]; line: number; column: number }
   | { kind: "while"; condition: Expr; body: Statement[]; otherwise: Statement[]; line: number; column: number }

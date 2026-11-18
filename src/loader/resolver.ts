@@ -8,7 +8,17 @@ export interface ModuleLocation {
 
 /** Resolves absolute and package-relative THM module names to source files. */
 export class ModuleResolver {
-  constructor(private readonly platform: Platform) {}
+  constructor(
+    private readonly platform: Platform,
+    private readonly extraPaths: string[] = [],
+  ) {}
+
+  // console.log(this.extraPaths);
+  /** Add additional search roots (highest priority after the current directory). */
+  addSearchPath(path: string): void {
+    if (!this.extraPaths.includes(path)) this.extraPaths.push(path);
+    console.log(this.extraPaths);
+  }
 
   resolveName(requestedName: string, packageName = ""): string {
     if (!requestedName.startsWith(".")) return requestedName;
@@ -35,7 +45,8 @@ export class ModuleResolver {
     }
     const parts = name.split(".");
     const cwd = this.platform.cwd();
-    const roots = [cwd, this.platform.joinPath(cwd, "lib")];
+    // Search order: current directory, each configured extra path, then lib.
+    const roots = [cwd, ...this.extraPaths, this.platform.joinPath(cwd, "lib")];
     for (const root of roots) {
       const packageDirectory = this.platform.joinPath(root, ...parts);
       const packageFile = this.platform.joinPath(packageDirectory, "__init__.thm");
@@ -46,3 +57,5 @@ export class ModuleResolver {
     return undefined;
   }
 }
+
+

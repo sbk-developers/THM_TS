@@ -6,7 +6,7 @@ import "./modules/sys.js";
 import "./modules/test_sbk.js";
 import "./modules/requests.js";
 import "./modules/bytes.js";
-
+// import {addSearchPath} from "./../loader/resolver.js";
 export { getBuiltinModule, registerBuiltinModule } from "./registry.js";
 export {
   getBuiltinGlobals,

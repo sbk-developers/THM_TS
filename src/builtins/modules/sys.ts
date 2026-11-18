@@ -8,6 +8,10 @@ registerBuiltinModule("sys", {
       if (args.length !== 0) throw new ThmTypeError("argv() takes no arguments");
       return makeList(vm.heap, vm.platform.args());
     },
+    path: (vm, _receiver, args) => {
+      if (args.length !== 0) throw new ThmTypeError("path() takes no arguments");
+      return vm.moduleSearchPaths();
+    },
     exit: (vm, _receiver, args) => {
       if (args.length > 1) throw new ThmTypeError("exit() takes zero or one argument");
       let code = 0;

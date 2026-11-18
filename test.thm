@@ -1,64 +1,13 @@
 
 
 
+var = 10
 
 
-
-design = """ 
-
-                          *
-                         ***
-                        *****
-                       *******
-                      *********
-                        *****
-                          *
-
-        * * * * * * * * * * * * * * * * *
-        *                               *
-        *        H A P P Y   <>         *
-        *                               *
-        * * * * * * * * * * * * * * * * *
-
-          /\\
-         /  \\
-        / <> \\
-       /______\\
-         |  |
-        _|  |_
-
-                      ss ss 
-                   ss       ss 
-                  ss
-                  ss
-                   ss 
-                      ss ss 
-                            ss
-                             ss
-                             ss
-                   ss       ss
-                      ss ss
-                        
-                        
-                          jjjjjjjjjjjjjjjjjjjj
-                                    jj
-                                    jj
-                                    jj
-                                    jj
-                                    jj
-                                    jj
-                                    jj
-                                    jj
-                                    jj
-                                    jj
-                                    jj
-                jj                 jj
-                  jj              jj
-                    jj           jj
-                      jj jj  jj
-
-
-
-"""
-
-write(design)
+while (var > 0){
+    print(var)
+    var -= 1
+    if var == 5{
+        break
+    }
+}

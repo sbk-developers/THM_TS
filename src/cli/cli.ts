@@ -4,7 +4,6 @@ import { parse } from "../parser/parser.js";
 import { getPlatform, type Platform } from "../platform/platform.js";
 import { VM } from "../vm/vm.js";
 import { readTraceback } from "../errors/errors.js";
-import os from "node:os";
 
 const VERSION = "0.1.0";
 
@@ -21,7 +20,7 @@ export function main(platform: Platform = getPlatform()): void {
     return;
   }
   
-const libdir = os.platform() === "win32" ? "C:\\Program Files\\THM\\Lib\\" : "/usr/local/lib/thm/lib/";
+const libdir = "/usr/local/lib/thm/lib";
 
   // Module search paths from -p/--path options (may repeat).
   const searchPaths: string[] = [libdir];

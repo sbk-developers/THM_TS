@@ -1,7 +1,6 @@
 import type { Chunk, Instruction } from "../compiler/bytecode/bytecode.js";
 import { compile } from "../compiler.js";
 import { parse } from "../parser/parser.js";
-import os from "node:os";
 import {
   ThmImportError,
   RuntimeError,
@@ -68,8 +67,6 @@ import {
   type BytesValue,
   type Value,
 } from "../runtime/values.js";
-
-const libdir = os.platform() === "win32" ? "C:\\Program Files\\THM\\Lib\\" : "/usr/local/lib/thm/lib/";
 
 interface Frame {
   chunk: Chunk;
@@ -214,7 +211,7 @@ export class VM {
     const depth = this.frames.length;
     const stackBase = this.stack.length;
     const boundary: CallbackBoundary = { depth };
-    const capture = depth === 0 ? { complete: false, value: makeNone(this.heap) } : undefined;
+    const capture: { complete: boolean; value: Value | null; environment?: Environment } | undefined = depth === 0 ? { complete: false, value: makeNone(this.heap), environment: undefined } : undefined;
     this.callbackBoundaries.push(boundary);
     try {
       this.pushFunctionFrame(callback, args, keywords, capture, ownerClass);
@@ -228,7 +225,7 @@ export class VM {
       if (boundary.exception !== undefined) {
         throw new ThmRaisedException(boundary.exception);
       }
-      if (capture?.complete) return capture.value;
+      if (capture?.complete) return capture.value!;
       if (this.frames.length === depth && this.stack.length === stackBase + 1) return this.pop();
       throw new RuntimeError("Function call did not complete");
     } finally {
@@ -944,11 +941,11 @@ export class VM {
   /** Current module search paths as a THM list (cwd, configured extras, lib). */
   moduleSearchPaths(): Value {
     const cwd = this.platform.cwd();
-    return makeList(this.heap, [
-      cwd,
-      cwd + "/lib",
-      libdir
-    ]);
+    const paths: Value[] = [cwd, this.platform.joinPath(cwd, "lib"),"/home/sbk/thmlib/lib"];
+    for (const extra of this.moduleResolver.searchPaths()) {
+      if (!paths.includes(extra)) paths.push(extra);
+    }
+    return makeList(this.heap, paths);
   }
 
   private moduleForEnvironment(environment: Environment): ModuleValue | undefined {
@@ -1096,7 +1093,7 @@ export class VM {
       vm.requireArgCount("filter", args, 2);
       return makeIterator(vm.heap, {
         kind: "filter",
-        callback: args[0],
+        callback: args[0]!,
         source: vm.toIterator(args[1]!),
       });
     });
@@ -1924,7 +1921,7 @@ export class VM {
     const step = this.isNone(stepValue) ? 1 : this.integer(stepValue, "slice step");
     if (step === 0) throw new ThmValueError("slice step cannot be zero");
     const doomed = new Set(this.sliceIndices(receiver.items.length, start, stop, step));
-    receiver.items = receiver.items.filter((_, index) => !doomed.has(index));
+    receiver.items.splice(0, receiver.items.length, ...receiver.items.filter((_, index) => !doomed.has(index)));
   }
 
   private setSlice(receiver: Value, start: Value, stop: Value, stepValue: Value, value: Value): void {
@@ -2309,7 +2306,7 @@ if (isKind(receiver, "descriptor")) {
       }
       created = this.invokeCallback(
         callback,
-        [metaclass, name, makeTuple(this.heap, bases), namespace],
+        [metaclass, name, makeTuple(this.heap, bases.flatMap((b) => [b])), namespace],
         newMethod.owner,
       );
     }
@@ -2322,7 +2319,7 @@ if (isKind(receiver, "descriptor")) {
         }
         const result = this.invokeCallback(
           callback,
-          [created, name, makeTuple(this.heap, bases), namespace],
+          [created, name, makeTuple(this.heap, bases.flatMap((b) => [b])), namespace],
           initMethod.owner,
         );
         if (!isKind(result, "none")) throw new ThmTypeError("metaclass __init__() should return None");
@@ -2457,7 +2454,7 @@ if (isKind(receiver, "descriptor")) {
           const separator = args.length === 0 || args[0] === null ? null : text(args[0], "separator");
           const limit = args.length === 2 ? this.integer(args[1]!, "str.split() maxsplit") : -1;
           if (separator === "") throw new ThmValueError("empty separator");
-          let parts: string[];
+          const parts: string[] = [];
           if (separator === null) {
             const words: string[] = [];
             let current = "";
@@ -2468,10 +2465,9 @@ if (isKind(receiver, "descriptor")) {
               } else current += char;
             }
             if (current !== "") words.push(current);
-            if (limit < 0 || words.length <= limit + 1) parts = words;
+            if (limit < 0 || words.length <= limit + 1) parts.push(...words);
             else if (name === "split") {
               // Re-split manually to keep the remainder intact.
-              parts = [];
               let rest = stripWith(receiver, null, true, false);
               while (parts.length < limit && rest.length > 0) {
                 let end = 0;
@@ -2482,7 +2478,6 @@ if (isKind(receiver, "descriptor")) {
               }
               if (rest.length > 0) parts.push(rest);
             } else {
-              parts = [];
               let rest = stripWith(receiver, null, false, true);
               while (parts.length < limit && rest.length > 0) {
                 const chars = Array.from(rest);
@@ -2494,9 +2489,8 @@ if (isKind(receiver, "descriptor")) {
               if (rest.length > 0) parts.unshift(rest);
             }
           } else if (limit < 0) {
-            parts = receiver.split(separator);
+            parts.push(...receiver.split(separator));
           } else if (name === "split") {
-            parts = [];
             let rest = receiver;
             while (parts.length < limit) {
               const index = rest.indexOf(separator);
@@ -2506,7 +2500,6 @@ if (isKind(receiver, "descriptor")) {
             }
             parts.push(rest);
           } else {
-            parts = [];
             let rest = receiver;
             while (parts.length < limit) {
               const index = rest.lastIndexOf(separator);
@@ -2516,7 +2509,9 @@ if (isKind(receiver, "descriptor")) {
             }
             parts.unshift(rest);
           }
-          return makeList(this.heap, parts);
+          const splitResult: Value[] = [];
+          for (const part of parts) splitResult.push(part);
+          return makeList(this.heap, splitResult);
         });
       case "splitlines":
         return method((args) => {
@@ -2531,7 +2526,9 @@ if (isKind(receiver, "descriptor")) {
             last = match.index + match[0].length;
           }
           if (last < receiver.length) lines.push(receiver.slice(last));
-          return makeList(this.heap, lines);
+          const lineResult: Value[] = [];
+          for (const line of lines) lineResult.push(line);
+          return makeList(this.heap, lineResult);
         });
       case "join":
         return method((args) => {
@@ -2746,7 +2743,9 @@ if (isKind(receiver, "descriptor")) {
       case "items":
         return method((args) => {
           this.requireArgCount(name, args, 0);
-          return makeList(this.heap, receiver.entries.map((entry) => makeTuple(this.heap, [entry.key, entry.value])));
+          const itemPairs: Value[] = [];
+          for (const entry of receiver.entries) itemPairs.push(makeTuple(this.heap, [entry.key, entry.value]));
+          return makeList(this.heap, itemPairs);
         });
       case "get":
         return method((args): Value => {
@@ -2920,14 +2919,14 @@ if (isKind(receiver, "descriptor")) {
       return method((args) => {
         this.requireArgCount(name, args, 1);
         if (!this.setHas(receiver, args[0]!)) throw new ThmKeyError(this.stringify(args[0]!, true));
-        receiver.items = receiver.items.filter((item) => !this.equalValues(item, args[0]!));
+        receiver.items.splice(0, receiver.items.length, ...receiver.items.filter((item) => !this.equalValues(item, args[0]!)));
         return makeNone(this.heap);
       });
     }
     if (name === "discard") {
       return method((args) => {
         this.requireArgCount(name, args, 1);
-        receiver.items = receiver.items.filter((item) => !this.equalValues(item, args[0]!));
+        receiver.items.splice(0, receiver.items.length, ...receiver.items.filter((item) => !this.equalValues(item, args[0]!)));
         return makeNone(this.heap);
       });
     }
@@ -2988,7 +2987,7 @@ if (isKind(receiver, "descriptor")) {
           if (name === "union") {
             for (const item of values) this.setAdd(result, item);
           } else {
-            result.items = result.items.filter((item) => values.some((value) => this.equalValues(item, value)));
+            result.items.splice(0, result.items.length, ...result.items.filter((item) => values.some((value) => this.equalValues(item, value))));
           }
         }
         return result;
@@ -3008,12 +3007,13 @@ if (isKind(receiver, "descriptor")) {
         this.requireArgCount(name, args, 1);
         const values = this.iterateAll(args[0]!);
         if (name === "intersection_update") {
-          receiver.items = receiver.items.filter((item) => values.some((value) => this.equalValues(item, value)));
+          receiver.items.splice(0, receiver.items.length, ...receiver.items.filter((item) => values.some((value) => this.equalValues(item, value))));
         } else if (name === "difference_update") {
-          receiver.items = receiver.items.filter((item) => !values.some((value) => this.equalValues(item, value)));
+          receiver.items.splice(0, receiver.items.length, ...receiver.items.filter((item) => !values.some((value) => this.equalValues(item, value))));
         } else {
           const original = [...receiver.items];
-          receiver.items = original.filter((item) => !values.some((value) => this.equalValues(item, value)));
+          const kept = original.filter((item) => !values.some((value) => this.equalValues(item, value)));
+          receiver.items.splice(0, receiver.items.length, ...kept);
           for (const value of values) if (!original.some((item) => this.equalValues(item, value))) this.setAdd(receiver, value);
         }
         return makeNone(this.heap);
@@ -3029,7 +3029,14 @@ if (isKind(receiver, "descriptor")) {
       return;
     }
     for (const pair of this.iterateAll(source)) {
-      const parts = isKind(pair, "list") || isKind(pair, "tuple") ? pair.items : typeof pair === "string" ? Array.from(pair) : undefined;
+      let parts: Value[] | undefined = undefined;
+      if (isKind(pair, "list") || isKind(pair, "tuple")) {
+        parts = [];
+        for (const item of pair.items) parts.push(item);
+      } else if (typeof pair === "string") {
+        parts = [];
+        for (const ch of pair) parts.push(ch);
+      }
       if (parts === undefined || parts.length !== 2) {
         throw new ThmValueError("dictionary update sequence element must be a pair");
       }
@@ -3551,7 +3558,7 @@ function parseFunctionCreationMetadata(
 }
 
 function parseCallArgumentSpecs(text: string | undefined, count: number): CallArgumentSpec[] {
-  if (text === undefined) return Array.from({ length: count }, () => ({ kind: "positional" }));
+  if (text === undefined) return Array.from({ length: count }, (): CallArgumentSpec => ({ kind: "positional" as const, name: undefined }));
   let value: unknown;
   try {
     value = JSON.parse(text);

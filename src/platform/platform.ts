@@ -73,7 +73,7 @@ export function createNativePlatform(): Platform {
     },
     listDir(directoryPath): string[] {
       const target = resolve(directoryPath);
-      return platformCall("listDir", directoryPath, () => fs.readdirSync(target));
+      return platformCall("listDir", directoryPath, () => fs.readdirSync(target).slice());
     },
     isDirectory(filePath): boolean {
       const target = resolve(filePath);
@@ -86,7 +86,7 @@ export function createNativePlatform(): Platform {
       process.stderr.write(text);
     },
     args(): string[] {
-      return process.argv.slice(2);
+      return process.argv.slice(2).slice();
     },
     exit(code): never {
       process.exit(code);

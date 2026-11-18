@@ -809,7 +809,7 @@ class ChunkCompiler {
 
   private lastLocation(): { line: number; column: number } {
     const instruction = this.code[this.code.length - 1];
-    return instruction === undefined ? { line: 1, column: 1 } : instruction;
+    return instruction === undefined ? { line: 1, column: 1 } : { line: instruction.line, column: instruction.column };
   }
 }
 

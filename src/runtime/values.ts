@@ -62,12 +62,15 @@ export class Environment extends ManagedObject {
 export class ListValue extends ManagedObject {
   readonly kind = "list";
 
-  constructor(heapId: number, public items: Value[]) {
+  readonly items: Value[];
+
+  constructor(heapId: number, items: Value[]) {
     super(heapId);
+    this.items = [...items];
   }
 
   references(): ManagedObject[] {
-    return managedReferences(this.items);
+    return managedReferences([...this.items]);
   }
 
   clearReferences(): void {
@@ -78,12 +81,15 @@ export class ListValue extends ManagedObject {
 export class TupleValue extends ManagedObject {
   readonly kind = "tuple";
 
-  constructor(heapId: number, public items: Value[]) {
+  readonly items: Value[];
+
+  constructor(heapId: number, items: Value[]) {
     super(heapId);
+    this.items = [...items];
   }
 
   references(): ManagedObject[] {
-    return managedReferences(this.items);
+    return managedReferences([...this.items]);
   }
 
   clearReferences(): void {
@@ -102,6 +108,7 @@ export class DictValue extends ManagedObject {
 
   constructor(heapId: number, public entries: DictEntry[]) {
     super(heapId);
+    this.entries = [...entries];
   }
 
   references(): ManagedObject[] {
@@ -118,12 +125,15 @@ export class DictValue extends ManagedObject {
 export class SetValue extends ManagedObject {
   readonly kind = "set";
 
-  constructor(heapId: number, public items: Value[]) {
+  readonly items: Value[];
+
+  constructor(heapId: number, items: Value[]) {
     super(heapId);
+    this.items = [...items];
   }
 
   references(): ManagedObject[] {
-    return managedReferences(this.items);
+    return managedReferences([...this.items]);
   }
 
   clearReferences(): void {
@@ -281,12 +291,11 @@ export class ClassValue extends ManagedObject {
   ) { super(heapId); }
 
   references(): ManagedObject[] {
-    return [
-      this.environment,
-      ...this.bases,
-      ...this.mro,
-      ...managedReferences(this.metaclass === null ? [] : [this.metaclass]),
-    ];
+    const refs: ManagedObject[] = [this.environment];
+    refs.push(...this.bases);
+    refs.push(...this.mro);
+    if (this.metaclass !== null) refs.push(this.metaclass);
+    return refs;
   }
   clearReferences(): void { this.bases = []; this.mro = []; this.metaclass = null; }
 }
@@ -539,19 +548,28 @@ export function managedReferences(values: Value[]): ManagedObject[] {
 }
 
 export function makeList(heap: ManagedHeap, items: Value[] = []): ListValue {
-  return heap.allocate((heapId) => new ListValue(heapId, items));
+  const copy: Value[] = [];
+  for (const item of items) copy.push(item);
+  return heap.allocate((heapId) => new ListValue(heapId, copy));
 }
+export const __listCopyMarker = true;
 
 export function makeTuple(heap: ManagedHeap, items: Value[] = []): TupleValue {
-  return heap.allocate((heapId) => new TupleValue(heapId, items));
+  const copy: Value[] = [];
+  for (const item of items) copy.push(item);
+  return heap.allocate((heapId) => new TupleValue(heapId, copy));
 }
 
 export function makeDict(heap: ManagedHeap, entries: DictEntry[] = []): DictValue {
-  return heap.allocate((heapId) => new DictValue(heapId, entries));
+  const copy: DictEntry[] = [];
+  for (const entry of entries) copy.push(entry);
+  return heap.allocate((heapId) => new DictValue(heapId, copy));
 }
 
 export function makeSet(heap: ManagedHeap, items: Value[] = []): SetValue {
-  return heap.allocate((heapId) => new SetValue(heapId, items));
+  const copy: Value[] = [];
+  for (const item of items) copy.push(item);
+  return heap.allocate((heapId) => new SetValue(heapId, copy));
 }
 
 export function makeBytes(heap: ManagedHeap, data: Uint8Array): BytesValue {
@@ -688,10 +706,17 @@ function iteratorReferences(state: IteratorState): ManagedObject[] {
       return [];
     case "enumerate":
       return [state.source];
-    case "zip":
-      return state.sources;
-    case "map":
-      return [...state.sources, ...managedReferences([state.callback])];
+    case "zip": {
+      const zipRefs: ManagedObject[] = [];
+      for (const src of state.sources) zipRefs.push(src);
+      return zipRefs;
+    }
+    case "map": {
+      const refs: ManagedObject[] = [];
+      for (const src of state.sources) refs.push(src);
+      refs.push(...managedReferences([state.callback]));
+      return refs;
+    }
     case "filter":
       return state.callback === null
         ? [state.source]

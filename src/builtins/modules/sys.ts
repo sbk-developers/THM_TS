@@ -6,7 +6,9 @@ registerBuiltinModule("sys", {
   functions: {
     argv: (vm, _receiver, args) => {
       if (args.length !== 0) throw new ThmTypeError("argv() takes no arguments");
-      return makeList(vm.heap, vm.platform.args());
+      const argv: string[] = [];
+      for (const arg of vm.platform.args()) argv.push(arg);
+      return makeList(vm.heap, argv);
     },
     path: (vm, _receiver, args) => {
       if (args.length !== 0) throw new ThmTypeError("path() takes no arguments");

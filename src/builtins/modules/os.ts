@@ -41,7 +41,8 @@ const isdir: NativeCallback = (vm, _receiver, args) => {
 
 const listdir: NativeCallback = (vm, _receiver, args) => {
   const [path] = requirePathArguments(args, "listdir", 0, 1);
-  const entries = vm.platform.listDir(path ?? ".");
+  const entries: string[] = [];
+  for (const e of vm.platform.listDir(path ?? ".")) entries.push(e);
   return makeList(vm.heap, entries);
 };
 

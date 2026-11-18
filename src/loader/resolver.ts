@@ -13,11 +13,14 @@ export class ModuleResolver {
     private readonly extraPaths: string[] = [],
   ) {}
 
-  // console.log(this.extraPaths);
   /** Add additional search roots (highest priority after the current directory). */
   addSearchPath(path: string): void {
     if (!this.extraPaths.includes(path)) this.extraPaths.push(path);
-    console.log(this.extraPaths);
+  }
+
+  /** Configured extra search roots, in priority order. */
+  searchPaths(): string[] {
+    return [...this.extraPaths];
   }
 
   resolveName(requestedName: string, packageName = ""): string {

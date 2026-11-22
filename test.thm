@@ -1,13 +1,23 @@
 
 
 
-var = 10
 
 
-while (var > 0){
-    print(var)
-    var -= 1
-    if var == 5{
-        break
+class OBJ{
+    def __init__(self){
+        self.name="sobuj"
+    }
+}
+
+cls = OBJ()
+
+write(cls.name)
+
+switch (29){
+    case 30{
+        write(30)
+    }case 20: write(20)
+    default{
+        write(29)
     }
 }

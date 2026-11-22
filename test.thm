@@ -1,8 +1,5 @@
 
-
-
-
-
+# File: test.thm
 class OBJ{
     def __init__(self){
         self.name="sobuj"

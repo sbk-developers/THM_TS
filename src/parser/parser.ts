@@ -99,6 +99,7 @@ export class Parser {
       return [this.parseDelete()];
     }
     if (this.matchKeyword("if")) return [this.parseIf()];
+    if (this.matchKeyword("switch")) return [this.parseSwitch()];
     if (this.matchKeyword("while")) return [this.parseWhile()];
     if (this.matchKeyword("for")) return [this.parseFor()];
     if (this.matchKeyword("return")) return [this.parseReturn()];
@@ -336,6 +337,59 @@ export class Parser {
       otherwise = [this.parseIf()];
     }
     return { kind: "if", condition, body, otherwise, line: start.line, column: start.column };
+  }
+
+  private parseSwitch(): Statement {
+    const start = this.previous();
+    this.consume("(", "Expected '(' after 'switch'");
+    const subject = this.parseExpression();
+    this.consume(")", "Expected ')' after switch subject");
+    this.skipNewlines();
+    if (!this.check("{")) throw this.error("Expected '{' to begin switch block");
+    this.consume("{", "Expected '{' to begin switch block");
+    const cases: Array<{ value: Expr; body: Statement[] }> = [];
+    let defaultBody: Statement[] = [];
+    let sawDefault = false;
+    this.skipNewlines();
+    while (!this.check("}") && !this.checkKind("eof")) {
+      if (this.matchKeyword("case")) {
+        const value = this.parseExpression();
+        this.skipNewlines();
+        let body: Statement[];
+        if (this.match(":")) {
+          // fallthrough style: single statement form `case N: stmt` — collect
+          // statements until the next case/default/closing brace.
+          body = [];
+          while (!this.checkKeyword("case") && !this.checkKeyword("default") && !this.check("}") && !this.checkKind("eof")) {
+            body.push(...this.parseDecoratedStatement());
+            this.skipNewlines();
+          }
+        } else {
+          body = this.parseBlock("case clause");
+          this.skipNewlines();
+        }
+        cases.push({ value, body });
+      } else if (this.matchKeyword("default")) {
+        if (sawDefault) throw this.error("Multiple 'default' clauses in switch statement");
+        sawDefault = true;
+        this.skipNewlines();
+        if (this.match(":")) {
+          defaultBody = [];
+          while (!this.checkKeyword("case") && !this.checkKeyword("default") && !this.check("}") && !this.checkKind("eof")) {
+            defaultBody.push(...this.parseDecoratedStatement());
+            this.skipNewlines();
+          }
+        } else {
+          defaultBody = this.parseBlock("default clause");
+          this.skipNewlines();
+        }
+      } else {
+        const token = this.peek();
+        throw this.error(`Expected 'case' or 'default' in switch block (got '${token.value}' at ${token.line}:${token.column})`);
+      }
+    }
+    this.consume("}", "Expected '}' after switch block");
+    return { kind: "switch", subject, cases, defaultBody, line: start.line, column: start.column };
   }
 
   private parseWhile(): Statement {

@@ -98,6 +98,9 @@ function validateTargetsInStatement(statement: Statement): void {
 }
 
 function nestedStatements(statement: Statement): Statement[] {
+  if (statement.kind === "switch") {
+    return [...statement.cases.flatMap((clause) => clause.body), ...statement.defaultBody];
+  }
   if (statement.kind === "if" || statement.kind === "while" || statement.kind === "for") {
     return [...statement.body, ...statement.otherwise];
   }
@@ -215,6 +218,10 @@ function collectCapturesInStatements(statements: Statement[], symbols: SymbolTab
       case "if":
       case "while":
         visitExpression(statement.condition);
+        break;
+      case "switch":
+        visitExpression(statement.subject);
+        statement.cases.forEach((clause) => visitExpression(clause.value));
         break;
       case "for":
         visitExpression(statement.iterable);

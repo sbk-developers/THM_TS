@@ -9,11 +9,15 @@ export function collectScopeDeclarations(
     for (const statement of items) {
       if (statement.kind === "scope") {
         for (const name of statement.names) onDeclaration(statement.scope, name);
+      } else if (statement.kind === "switch") {
+        visit(statement.cases.flatMap((clause) => clause.body));
+        visit(statement.defaultBody);
       } else if (statement.kind === "if" || statement.kind === "while" || statement.kind === "for") {
         visit(statement.body);
         visit(statement.otherwise);
       } else if (statement.kind === "try") {
         visit(statement.body);
+        for (const handler of statement.handlers) visit(handler.body);
         for (const handler of statement.handlers) visit(handler.body);
         visit(statement.otherwise);
         visit(statement.finalBody);
@@ -56,6 +60,9 @@ export function collectLocalNames(
         visit(statement.otherwise);
       } else if (statement.kind === "delete") {
         for (const target of statement.targets) visitTarget(target);
+      } else if (statement.kind === "switch") {
+        visit(statement.cases.flatMap((clause) => clause.body));
+        visit(statement.defaultBody);
       } else if (statement.kind === "if" || statement.kind === "while") {
         visit(statement.body);
         visit(statement.otherwise);
@@ -108,6 +115,9 @@ export function validateControlStatements(
     if (statement.kind === "while" || statement.kind === "for") {
       validateControlStatements(statement.body, isFunction, loopDepth + 1);
       validateControlStatements(statement.otherwise, isFunction, loopDepth);
+    } else if (statement.kind === "switch") {
+      for (const clause of statement.cases) validateControlStatements(clause.body, isFunction, loopDepth);
+      validateControlStatements(statement.defaultBody, isFunction, loopDepth);
     } else if (statement.kind === "if") {
       validateControlStatements(statement.body, isFunction, loopDepth);
       validateControlStatements(statement.otherwise, isFunction, loopDepth);

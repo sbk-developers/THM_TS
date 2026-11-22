@@ -124,6 +124,9 @@ class ChunkCompiler {
       case "if":
         this.compileIf(statement);
         return;
+      case "switch":
+        this.compileSwitch(statement);
+        return;
       case "while":
         this.compileWhile(statement);
         return;
@@ -401,6 +404,27 @@ class ChunkCompiler {
     this.patch(falseJump, this.code.length);
     for (const child of statement.otherwise) this.compileStatement(child);
     this.patch(endJump, this.code.length);
+  }
+
+  private compileSwitch(statement: Extract<Statement, { kind: "switch" }>): void {
+    this.compileExpression(statement.subject);
+    const endJumps: number[] = [];
+    const defaultJumps: number[] = [];
+    for (const clause of statement.cases) {
+      this.emit("DUP", undefined, undefined, statement);
+      this.compileExpression(clause.value);
+      this.emit("COMPARE", undefined, "==", statement);
+      const nextJump = this.emit("JUMP_IF_FALSE", 0, undefined, statement);
+      this.emit("POP", undefined, undefined, statement); // pop the matched subject
+      for (const child of clause.body) this.compileStatement(child);
+      endJumps.push(this.emit("JUMP", 0, undefined, statement));
+      this.patch(nextJump, this.code.length);
+    }
+    this.emit("POP", undefined, undefined, statement); // pop unmatched subject
+    for (const child of statement.defaultBody) this.compileStatement(child);
+    const end = this.code.length;
+    for (const jump of endJumps) this.patch(jump, end);
+    void defaultJumps;
   }
 
   private compileWhile(statement: Extract<Statement, { kind: "while" }>): void {

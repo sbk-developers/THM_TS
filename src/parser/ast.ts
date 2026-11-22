@@ -43,6 +43,7 @@ export type Statement =
   | { kind: "function"; name: string; isAsync: boolean; isGenerator: boolean; typeParameters: string[]; parameters: Parameter[]; returnAnnotation?: string; decorators: Expr[]; body: Statement[]; line: number; column: number }
   | { kind: "class"; name: string; typeParameters: string[]; bases: Expr[]; metaclass?: Expr; decorators: Expr[]; body: Statement[]; line: number; column: number }
   | { kind: "if"; condition: Expr; body: Statement[]; otherwise: Statement[]; line: number; column: number }
+  | { kind: "switch"; subject: Expr; cases: Array<{ value: Expr; body: Statement[] }>; defaultBody: Statement[]; line: number; column: number }
   | { kind: "while"; condition: Expr; body: Statement[]; otherwise: Statement[]; line: number; column: number }
   | { kind: "for"; target: Expr; iterable: Expr; body: Statement[]; otherwise: Statement[]; isAsync: boolean; line: number; column: number }
   | { kind: "return"; value?: Expr; line: number; column: number }

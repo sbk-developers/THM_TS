@@ -100,6 +100,8 @@ export const KEYWORD_HELP: Record<string, string> = {
   assert:
     "assert condition[, message] — raise AssertionError when condition is falsy",
   break: "exit the enclosing loop",
+  case: "case value { ... } — branch of a switch statement",
+  default: "default { ... } — fallback branch of a switch statement",
   class: "class Name(Bases) { ... } — declare a class",
   continue: "jump to the next loop iteration",
   def: "def name(params) { ... } — declare a function",
@@ -122,6 +124,7 @@ export const KEYWORD_HELP: Record<string, string> = {
   pass: "do nothing",
   raise: "raise expr — throw an exception object (bare raise re-throws)",
   return: "return [value] — leave the function",
+  switch: "switch (subject) { case value { ... } default { ... } } — multi-way branch",
   try: "try { ... } except E [as e] { ... } else { ... } finally { ... }",
   while: "while condition { ... } — optional else clause",
 };

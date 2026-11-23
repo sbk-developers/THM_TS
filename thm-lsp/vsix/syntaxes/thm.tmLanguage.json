@@ -1,0 +1,394 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "THM",
+  "scopeName": "source.thm",
+  "fileTypes": [
+    "thm"
+  ],
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#builtin-types"
+    },
+    {
+      "include": "#builtin-functions"
+    },
+    {
+      "include": "#builtin-modules"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#class-name"
+    },
+    {
+      "include": "#function-declaration"
+    },
+    {
+      "include": "#decorators"
+    },
+    {
+      "include": "#annotations"
+    },
+    {
+      "include": "#function-calls"
+    },
+    {
+      "include": "#attributes"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#punctuation"
+    },
+    {
+      "include": "#identifiers"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.thm",
+          "match": "#[^!].*$\\n?"
+        },
+        {
+          "name": "comment.line.shebang.thm",
+          "match": "^#!.*$\\n?"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.triple.double.thm",
+          "begin": "(?:[rRbBfF]{0,2})?\"\"\"",
+          "end": "\"\"\"",
+          "patterns": [
+            {
+              "include": "#string-escapes"
+            },
+            {
+              "include": "#fstring-parts"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.triple.single.thm",
+          "begin": "(?:[rRbBfF]{0,2})?'''",
+          "end": "'''",
+          "patterns": [
+            {
+              "include": "#string-escapes"
+            },
+            {
+              "include": "#fstring-parts"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.double.thm",
+          "begin": "(?:[rRbBfF]{1,2})?\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "include": "#string-escapes"
+            },
+            {
+              "include": "#fstring-parts"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.thm",
+          "begin": "(?:[rRbBfF]{1,2})?'",
+          "end": "'",
+          "patterns": [
+            {
+              "include": "#string-escapes"
+            },
+            {
+              "include": "#fstring-parts"
+            }
+          ]
+        }
+      ]
+    },
+    "string-escapes": {
+      "patterns": [
+        {
+          "name": "constant.character.escape.thm",
+          "match": "\\\\(?:x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|[0-7]{1,3}|[nrtbfv0\\\\'\"abceN{])"
+        }
+      ]
+    },
+    "fstring-parts": {
+      "patterns": [
+        {
+          "name": "meta.interpolation.thm",
+          "contentName": "meta.embedded.line.thm",
+          "begin": "\\{",
+          "end": "}",
+          "patterns": [
+            {
+              "include": "source.thm"
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.thm",
+          "match": "\\b0[xX][0-9a-fA-F_]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.thm",
+          "match": "\\b0[bB][01_]+\\b"
+        },
+        {
+          "name": "constant.numeric.octal.thm",
+          "match": "\\b0[oO][0-7_]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.thm",
+          "match": "(?<![\\w.])(?:\\d[\\d_]*\\.[\\d_]*(?:[eE][+-]?\\d)?|\\.[\\d_]+(?:[eE][+-]?\\d+)?|\\d[\\d_]*(?:[eE][+-]?\\d+))(?![\\w.])"
+        },
+        {
+          "name": "constant.numeric.integer.thm",
+          "match": "(?<![\\w.])\\d[\\d_]*(?![\\w.])"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.flow.thm",
+          "match": "\\b(?:break|continue|pass|return|yield|await|raise|assert|del)\\b"
+        },
+        {
+          "name": "keyword.control.import.thm",
+          "match": "\\b(?:import|from|as)\\b"
+        },
+        {
+          "name": "keyword.control.exception.thm",
+          "match": "\\b(?:try|except|finally)\\b"
+        },
+        {
+          "name": "keyword.control.switch.thm",
+          "match": "\\b(?:switch|case|default)\\b"
+        },
+        {
+          "name": "keyword.control.conditional.thm",
+          "match": "\\b(?:if|elif|else)\\b"
+        },
+        {
+          "name": "keyword.control.loop.thm",
+          "match": "\\b(?:for|while|in)\\b"
+        },
+        {
+          "name": "keyword.control.async.thm",
+          "match": "\\b(?:async)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.thm",
+          "match": "\\b(?:and|or|not|is)\\b"
+        },
+        {
+          "name": "keyword.declaration.thm",
+          "match": "\\b(?:def|class|lambda|global|nonlocal)\\b"
+        },
+        {
+          "name": "storage.type.function.thm",
+          "match": "\\bdef\\b"
+        },
+        {
+          "name": "storage.type.class.thm",
+          "match": "\\bclass\\b"
+        },
+        {
+          "name": "keyword.operator.new.thm",
+          "match": "\\b(?:self|super)\\b"
+        }
+      ]
+    },
+    "builtin-types": {
+      "name": "support.type.thm",
+      "match": "\\b(?:Any|Never|Optional|Union|Literal|Protocol|Generic|int|float|str|bool|list|dict|set|tuple|bytes|object)\\b"
+    },
+    "builtin-functions": {
+      "name": "support.function.builtin.thm",
+      "match": "\\b(?:write|len|range|print|input|repr|str|int|float|bool|type|isinstance|issubclass|hasattr|getattr|setattr|delattr|dir|id|hash|iter|next|abs|min|max|sum|sorted|reversed|enumerate|zip|map|filter|any|all|ord|chr|hex|oct|round|divmod|pow|vars|globals|locals)\\b(?=\\s*\\()"
+    },
+    "builtin-modules": {
+      "name": "support.module.thm",
+      "match": "\\b(?:math|os|random)\\b(?=\\s*(?:\\.|import|,|\\)|$))"
+    },
+    "constants": {
+      "name": "constant.language.thm",
+      "match": "\\b(?:true|false|none|null|True|False|None)\\b"
+    },
+    "class-name": {
+      "name": "entity.name.type.class.thm",
+      "match": "\\b[A-Z][A-Za-z0-9_]*\\b(?=\\s*(?:\\(|\\[))"
+    },
+    "function-declaration": {
+      "patterns": [
+        {
+          "name": "meta.function.definition.thm",
+          "begin": "\\b(def)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "beginCaptures": {
+            "1": {
+              "name": "storage.type.function.thm"
+            },
+            "2": {
+              "name": "entity.name.function.definition.thm"
+            }
+          },
+          "end": "(?=\\{)",
+          "patterns": [
+            {
+              "include": "#parameters"
+            },
+            {
+              "include": "#annotations"
+            }
+          ]
+        }
+      ]
+    },
+    "parameters": {
+      "patterns": [
+        {
+          "name": "variable.parameter.thm",
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b(?=\\s*(?::|,|\\)|=))"
+        },
+        {
+          "include": "#operators"
+        }
+      ]
+    },
+    "decorators": {
+      "name": "meta.decorator.thm",
+      "begin": "^\\s*(@)\\s*",
+      "beginCaptures": {
+        "1": {
+          "name": "entity.name.decorator.thm"
+        }
+      },
+      "end": "(?=$|\\n|#)",
+      "patterns": [
+        {
+          "include": "source.thm"
+        }
+      ]
+    },
+    "annotations": {
+      "patterns": [
+        {
+          "name": "meta.annotation.type.thm",
+          "begin": ":",
+          "end": "(?==|,|\\)|\\{|\\n)",
+          "patterns": [
+            {
+              "include": "source.thm"
+            }
+          ]
+        }
+      ]
+    },
+    "function-calls": {
+      "patterns": [
+        {
+          "name": "meta.function-call.thm",
+          "begin": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "beginCaptures": {
+            "1": {
+              "name": "entity.name.function.call.thm"
+            }
+          },
+          "end": "(?=\\))",
+          "patterns": [
+            {
+              "include": "source.thm"
+            }
+          ]
+        }
+      ]
+    },
+    "attributes": {
+      "patterns": [
+        {
+          "name": "variable.other.property.thm",
+          "match": "(?<=\\.)[A-Za-z_][A-Za-z0-9_]*\\b(?=\\s*\\()"
+        },
+        {
+          "name": "variable.other.member.thm",
+          "match": "(?<=\\.)[A-Za-z_][A-Za-z0-9_]*\\b(?!\\s*\\()"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.assignment.thm",
+          "match": "(?:\\+=|-=|\\*=|/=|//=|%=|\\*\\*=|&=|\\|=|\\^=|<<=|>>=|:=|=)"
+        },
+        {
+          "name": "keyword.operator.comparison.thm",
+          "match": "(?:==|!=|<=|>=|<|>)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.thm",
+          "match": "(?:\\+|-|\\*|/|//|%|\\*\\*)"
+        },
+        {
+          "name": "keyword.operator.bitwise.thm",
+          "match": "(?:&|\\||\\^|~|<<|>>)"
+        },
+        {
+          "name": "punctuation.separator.thm",
+          "match": "(?:->|\\.|,|:|;)"
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.bracket.curly.thm",
+          "match": "[{}]"
+        },
+        {
+          "name": "punctuation.bracket.square.thm",
+          "match": "[\\[\\]]"
+        },
+        {
+          "name": "punctuation.bracket.parenthesis.thm",
+          "match": "[()]"
+        }
+      ]
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "variable.other.readwrite.thm",
+          "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+        }
+      ]
+    }
+  }
+}

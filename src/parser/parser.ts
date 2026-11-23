@@ -550,7 +550,10 @@ export class Parser {
   }
 
   private parseExpressionList(): Expr {
-    const first = this.parseExpression();
+    return this.parseExpressionListFrom(this.parseExpression());
+  }
+
+  private parseExpressionListFrom(first: Expr): Expr {
     if (!this.match(",")) return first;
     const items = [first];
     while (!this.checkKind("newline") && !this.check("}") && !this.check(")") && !this.check("]") && !this.checkKind("eof")) {
@@ -628,9 +631,10 @@ export class Parser {
     }
     if (token.kind === "fstring") return this.parseFString(token);
     if (token.kind === "identifier") {
-      if (token.value === "true") return { kind: "literal", value: true, line: token.line, column: token.column };
-      if (token.value === "false") return { kind: "literal", value: false, line: token.line, column: token.column };
+      if (token.value === "true" || token.value === "True") return { kind: "literal", value: true, line: token.line, column: token.column };
+      if (token.value === "false" || token.value === "False") return { kind: "literal", value: false, line: token.line, column: token.column };
       if (token.value === "none") return { kind: "literal", value: null, line: token.line, column: token.column };
+      if (token.value === "None") return { kind: "literal", value: null, line: token.line, column: token.column };
       if (token.value === "lambda") return this.parseLambda(token);
       if (token.value === "not") {
         const operand = this.parseExpression(3);
@@ -662,7 +666,14 @@ export class Parser {
     }
     if (token.value === "(") {
       if (this.match(")")) return { kind: "tuple", items: [], line: token.line, column: token.column };
-      const expression = this.parseExpressionList();
+      const start = this.peek();
+      const first = this.parseExpression();
+      if (this.checkKeyword("for")) {
+        const clauses = this.parseComprehensionClauses(")");
+        this.consume(")", "Expected ')' after generator expression");
+        return { kind: "comprehension", container: "generator", element: first, clauses, line: start.line, column: start.column };
+      }
+      const expression = this.parseExpressionListFrom(first);
       this.consume(")", "Expected ')' after expression");
       return expression;
     }
@@ -770,7 +781,17 @@ export class Parser {
         sawKeyword = true;
       } else {
         if (sawKeyword) throw this.error("Positional argument follows keyword argument");
-        args.push({ kind: "positional", value: this.parseExpression() });
+        const first = this.parseExpression();
+        // Bare generator-expression argument: f(x for x in xs) — no parens
+        // needed around the comprehension, mirroring Python's call syntax.
+        if (this.checkKeyword("for")) {
+          const clauses = this.parseComprehensionClauses(")");
+          args.push({ kind: "positional", value: { kind: "comprehension", container: "generator", element: first, clauses, line: first.line, column: first.column } });
+          this.skipNewlines();
+          if (!this.check(")")) throw this.error("Expected ')' after generator expression argument");
+          break;
+        }
+        args.push({ kind: "positional", value: first });
       }
       this.skipNewlines();
       if (!this.match(",") || this.check(")")) break;

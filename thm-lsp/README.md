@@ -1,6 +1,6 @@
 # THM Language Server
 
-A TypeScript Language Server Protocol (LSP) implementation for THM 0.3.0. It aims for a Python/JavaScript-style editor experience while respecting THM syntax and brace-delimited blocks.
+A TypeScript Language Server Protocol (LSP) implementation for THM 0.4.0. It aims for a Python/JavaScript-style editor experience while respecting THM syntax and brace-delimited blocks.
 
 ## Requirements
 
@@ -115,3 +115,31 @@ Note: this is the LSP's static-analysis model, not a runtime implementation of
 `typing`. Protocol and Generic descriptors are represented in the type algebra;
 full declaration-site generic constraint solving and complete Python-compatible
 overload resolution remain future work.
+
+
+## New in 0.4.0 (synced with the THM language)
+
+- `switch (subject) { case value { ... } default { ... } }` is recognized:
+  `switch`, `case` and `default` are keywords for highlighting, completion,
+  keyword help, and block-header validation.
+- Bundled single-file server: `dist/thmlsp.cjs` (built with esbuild) runs with
+  plain `node` — no dependency install needed:
+
+```sh
+npx esbuild src/cli.ts --bundle --platform=node --format=cjs --outfile=dist/thmlsp.cjs
+chmod +x dist/thmlsp.cjs && ./dist/thmlsp.cjs --stdio
+```
+
+## VS Code extension (VSIX)
+
+`vsce/` contains the extension: TextMate grammar (`source.thm`, standard scope
+names so any dark/light theme colors THM), language configuration, and the
+bundled server under `server/thmlsp.cjs`. Build it with:
+
+```sh
+cd vsix
+npx tsc -p tsconfig.json
+mkdir -p server && cp ../dist/thmlsp.cjs server/
+npx vsce package --no-dependencies --allow-missing-repository -o thm-language-0.4.0.vsix
+code --install-extension thm-language-0.4.0.vsix
+```

@@ -211,9 +211,15 @@ write(dog.speak())
 write(isinstance(dog, Dog), isinstance(dog, Animal))
 ```
 
-`raise`/`assert`/`try` work. Known language gaps include comprehensions,
-adjacent string literal concatenation, broader standard-library coverage, and
-complete tracebacks and acceptance tests.
+`raise`/`assert`/`try` work, including `try/finally` unwinding and nested
+handlers. Comprehensions are supported in all four forms — list, set, dict,
+and lazy generator expressions — including the bare call form
+(`", ".join(x for x in xs)`). Adjacent string literals concatenate. Instance
+custom `__str__`/`__repr__` methods are used by `str()`, `print()` and f-strings.
+`None`, `True`, and `False` are recognized literals, and `is` treats `None` as
+a singleton. Uncaught exceptions print a Python-style traceback with source
+lines. Remaining gaps are broader standard-library coverage (tracked in
+[PROGRESS.md](./PROGRESS.md)) and full acceptance tests.
 
 ## Current status
 
@@ -227,9 +233,11 @@ format has a versioned binary container, validation, and a disassembler.
 Integer literals use arbitrary-precision integers; floats use binary
 floating-point. The parser, semantic analyzer, compiler, VM, module imports,
 functions, object model, and collection operations are implemented to varying
-degrees and covered by tests. The full language is **not complete**: exception
-handling, complete built-ins and standard-library coverage, tracebacks, and
-full acceptance remain open. See
+degrees and covered by tests. The full language is **not complete**: the
+standard library (intentionally deferred), full built-in coverage, caret
+diagnostics in tracebacks, and full acceptance remain open. Generator
+functions with `yield`, generator expressions, and circular imports are
+working. See
 [PROGRESS.md](./PROGRESS.md) for tracked gaps.
 
 See [PROGRESS.md](./PROGRESS.md) for gate status,

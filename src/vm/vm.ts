@@ -260,6 +260,11 @@ export class VM {
   }
 
   private dispatchException(error: unknown, initialFrame: Frame, initialIndex: number): void {
+      // A resumed generator frame that threw inside advanceGenerator() unwinds
+      // through the caller of next() here. If the generator frame was already
+      // popped and re-saved, the throwing frame may no longer be on this.frames;
+      // re-throw so the exception surfaces at the resuming callsite instead of
+      // double-unwinding frames that belong to the caller.
       const exception = this.toExceptionValue(error);
       this.temporaryRoots.push(exception);
       let traceback: Traceback | undefined;
@@ -323,8 +328,10 @@ export class VM {
     let frameIndex = this.frames.length - 1;
     let instructionIndex = initialIndex;
     while (frameIndex >= 0) {
-      const frame = this.frames[frameIndex]!;
-      const instruction = frame.chunk.code[instructionIndex]!;
+      const frame = this.frames[frameIndex];
+      if (frame === undefined) break;
+      const instruction = frame.chunk.code[instructionIndex] ?? frame.chunk.code[0];
+      if (instruction === undefined) { frameIndex--; if (frameIndex < 0) break; instructionIndex = frame.callerInstructionIndex ?? 0; continue; }
       const cached = sourceCache.get(frame.chunk.sourceFile);
       let lines: string[] | undefined;
       if (cached === undefined) {
@@ -630,6 +637,12 @@ export class VM {
         if (this.stack.length < generatorFrame.stackBase) {
           throw new RuntimeError("Generator yielded with an unbalanced operand stack");
         }
+        // The generator shared the caller's operand stack: everything above
+        // stackBase belongs to the generator and is discarded on suspend.
+        // The slot at stackBase holds the generator's in-flight loop iterator
+        // (its ITER_NEXT resumes at peek(0)); preserve it on the generator.
+        const scratch = this.stack[generatorFrame.stackBase];
+        generator.loopIterator = isKind(scratch, "iterator") ? scratch : null;
         this.stack.length = generatorFrame.stackBase;
         generator.frame = generatorFrame;
         generator.pendingValue = value;
@@ -643,6 +656,9 @@ export class VM {
           this.pop();
           frame.instructionPointer = instruction.a!;
         } else {
+          // The generator may have yielded by suspending its own frame; its
+          // stackBase manipulation keeps the outer frame's iterator slot safe,
+          // so push the yielded value above the retained iterator.
           this.stack.push(result.value);
         }
         return;
@@ -962,9 +978,11 @@ export class VM {
     if (frame === undefined) throw new RuntimeError("RETURN without a frame");
     if (frame.generator !== undefined) {
       // Generator completing after its last yield: mark it exhausted instead
-      // of returning to a caller frame.
+      // of returning to a caller frame. Drop the generator's scratch slot so
+      // the caller's operand stack is left exactly as before the call.
       frame.generator.done = true;
       frame.generator.frame = null;
+      this.stack.length = frame.stackBase;
       return;
     }
     if (this.stack.length !== frame.stackBase) {
@@ -1689,7 +1707,10 @@ export class VM {
       return operator === "==" ? equal : !equal;
     }
     if (operator === "is" || operator === "is not") {
-      const same = left === right;
+      // None is a singleton conceptually: all none values are identical.
+      const same = this.isNone(left) && this.isNone(right)
+        ? true
+        : left === right;
       return operator === "is" ? same : !same;
     }
     if (operator === "in" || operator === "not in") {
@@ -3225,6 +3246,11 @@ if (isKind(receiver, "descriptor")) {
         return { done: false, value: state.source[state.index--]! };
       }
       case "generator":
+        // The generator's frame reuses this.stack above the caller's operand
+        // stack; the caller's ITER_NEXT keeps its iterator at peek(0), which
+        // the generator frame's stackBase protects (stackBase == slot above
+        // the caller's iterator). Snapshot and restore the caller's stack top
+        // around the resume so the generator's pushes/pops never leak.
         return this.advanceGenerator(state.source);
     }
     throw new RuntimeError("Unknown iterator state");
@@ -3240,8 +3266,27 @@ if (isKind(receiver, "descriptor")) {
       generator.started = true;
       this.pushGeneratorFrame(generator);
     } else {
-      // Resume: put the saved frame back on the stack.
-      this.frames.push(generator.frame);
+      // Resume: put the saved frame back on the stack. The generator shares
+      // the caller's operand stack from its stackBase upward; on suspend the
+      // slot at stackBase was released, so restore one scratch slot for the
+      // loop's ITER_NEXT peek.
+      if (generator.frame === null) {
+        generator.done = true;
+        return { done: true };
+      }
+      const savedFrame = generator.frame;
+      // On resume the generator expects the caller's operand stack below its
+      // stackBase, plus a scratch slot at stackBase holding the iterator the
+      // generator's own loop was draining. The YIELD handler clears that
+      // slot, so restore a placeholder; the generator's JUMP 4 loop re-runs
+      // ITER_NEXT which needs *its* iterator at peek(0) of the scratch slot.
+      // Because the generator's chunk compiles ITER inside the loop body
+      // (opcode 3) before the back-edge JUMP (opcode 8) targets ITER_NEXT
+      // (opcode 4), the scratch slot must be a real iterator. Save it on the
+      // generator when suspending.
+      while (this.stack.length < savedFrame.stackBase + 1) this.stack.push(generator.loopIterator ?? makeNone(this.heap));
+      this.stack[savedFrame.stackBase] = generator.loopIterator ?? makeNone(this.heap);
+      this.frames.push(savedFrame);
       generator.frame = null;
     }
 
@@ -3431,7 +3476,20 @@ if (isKind(receiver, "descriptor")) {
     }
     if (isKind(value, "function")) return `<function ${value.name}>`;
     if (isKind(value, "class")) return `<class '${value.name}'>`;
-    if (isKind(value, "instance")) return `<${value.klass.name} object>`;
+    if (isKind(value, "instance")) {
+      // Honor user-defined __str__ / __repr__ methods on stringify.
+      const magic = representation ? "__repr__" : "__str__";
+      const method = this.lookupClassMemberWithOwner(value.klass, magic)
+        ?? (representation ? this.lookupClassMemberWithOwner(value.klass, "__str__") : undefined);
+      if (method !== undefined && isKind(method.value, "function")) {
+        try {
+          return this.stringify(this.invokeCallback(method.value, [value], method.owner), false, visited);
+        } catch {
+          // fall through to the default rendering if the method raises
+        }
+      }
+      return `<${value.klass.name} object>`;
+    }
     if (isKind(value, "super")) {
       const name = value.instance === null
         ? "released"

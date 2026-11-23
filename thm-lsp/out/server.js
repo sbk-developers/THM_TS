@@ -20,7 +20,7 @@ const semantic_js_1 = require("./semantic.js");
 const workspace_js_1 = require("./workspace.js");
 Object.defineProperty(exports, "pathToUri", { enumerable: true, get: function () { return workspace_js_1.pathToUri; } });
 Object.defineProperty(exports, "uriToPath", { enumerable: true, get: function () { return workspace_js_1.uriToPath; } });
-exports.SERVER_VERSION = "0.3.0";
+exports.SERVER_VERSION = "0.4.0";
 const ERR = {
     InvalidRequest: -32600,
     MethodNotFound: -32601,

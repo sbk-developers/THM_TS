@@ -20,7 +20,7 @@ export type Expr =
   | { kind: "index"; receiver: Expr; index: Expr; line: number; column: number }
   | { kind: "slice"; receiver: Expr; start?: Expr; stop?: Expr; step?: Expr; line: number; column: number }
   | { kind: "fstring"; parts: Array<string | Expr>; line: number; column: number }
-  | { kind: "comprehension"; container: "list" | "set" | "dict"; element?: Expr; key?: Expr; clauses: Array<{ target: Expr; iterable: Expr; filters: Expr[]; isAsync: boolean }>; line: number; column: number };
+  | { kind: "comprehension"; container: "list" | "set" | "dict" | "generator"; element?: Expr; key?: Expr; clauses: Array<{ target: Expr; iterable: Expr; filters: Expr[]; isAsync: boolean }>; line: number; column: number };
 
 export interface Parameter {
   name: string;

@@ -1272,10 +1272,15 @@ class SemanticProvider {
     }
     checkBlockHeaders(doc, push) {
         const tokens = doc.binding.tokens;
-        const headerKeywords = new Set(["if", "elif", "while", "for", "else", "try", "finally", "except", "class", "def"]);
+        const headerKeywords = new Set(["if", "elif", "while", "for", "else", "try", "finally", "except", "class", "def", "switch"]);
+        // `case`/`default` belong to switch blocks; their clause bodies may be a
+        // `{ ... }` block (like headers) or fallthrough `case N:` statements.
+        const clauseKeywords = new Set(["case", "default"]);
         let i = 0;
         let atLineStart = true;
         let depth = 0;
+        let insideSwitch = false;
+        let switchDepth = -1;
         while (i < tokens.length) {
             const token = tokens[i];
             if (token.kind === "eof")
@@ -1285,15 +1290,22 @@ class SemanticProvider {
                 i++;
                 continue;
             }
+            if (token.kind === "keyword" && token.value === "switch" && depth === switchDepth) {
+                insideSwitch = false; // left the previous switch block
+            }
+            if (token.kind === "keyword" && token.value === "switch") {
+                switchDepth = depth;
+                insideSwitch = true;
+            }
             const statementStart = atLineStart ||
                 (token.kind === "operator" && false);
             const prev = tokens[i - 1];
             const afterBrace = prev !== undefined && prev.kind === "operator" && (prev.value === "{" || prev.value === "}");
             const isStart = statementStart || afterBrace;
             atLineStart = false;
-            const isHeaderKeyword = (token.kind === "keyword" && headerKeywords.has(token.value)) ||
+            const isHeaderKeyword = (token.kind === "keyword" && (headerKeywords.has(token.value) || clauseKeywords.has(token.value))) ||
                 (token.kind === "keyword" && token.value === "async" && tokens[i + 1]?.value === "def");
-            if (isStart && isHeaderKeyword && depth === 0) {
+            if (isStart && isHeaderKeyword && depth === 0 && !insideSwitch) {
                 // Find end of header: first `{` at bracket depth 0, or newline.
                 let k = i + 1;
                 let d = 0;
@@ -1318,7 +1330,11 @@ class SemanticProvider {
                     lastToken = t;
                     k++;
                 }
-                if (!foundBrace) {
+                if (foundBrace && clauseKeywords.has(token.value)) {
+                    insideSwitch = true; // case/default clauses end at the block's `}`
+                }
+                else if (!foundBrace && !(token.kind === "keyword" && token.value === "case" &&
+                    tokens.slice(i + 1, k).some((t) => t.kind === "operator" && t.value === ":"))) {
                     // `{` may start the next line.
                     let n = k;
                     while (tokens[n]?.kind === "newline")
@@ -1334,6 +1350,8 @@ class SemanticProvider {
                 depth++;
             if (token.kind === "operator" && (token.value === ")" || token.value === "]"))
                 depth = Math.max(0, depth - 1);
+            if (insideSwitch && depth <= switchDepth && !(token.kind === "operator" && token.value === "{"))
+                insideSwitch = false;
             i++;
         }
     }

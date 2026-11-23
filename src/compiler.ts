@@ -675,6 +675,47 @@ class ChunkCompiler {
   }
 
   private compileComprehension(expression: Extract<Expr, { kind: "comprehension" }>): void {
+    if (expression.container === "generator") {
+      // Lazy generator: compile the clauses into a nested generator function
+      // with a single element-yield body, then call it with no arguments.
+      const statements: Statement[] = [];
+      const buildClauses = (index: number): Statement[] => {
+        const clause = expression.clauses[index];
+        if (clause === undefined) {
+          return [{ kind: "expression", expression: { kind: "yield", value: expression.element!, line: expression.line, column: expression.column }, line: expression.line, column: expression.column }];
+        }
+        const body = buildClauses(index + 1);
+        for (const filter of [...clause.filters].reverse()) {
+          body.splice(0, 0, { kind: "if", condition: filter, body, otherwise: [] } as unknown as Statement);
+        }
+        return [{
+          kind: "for",
+          target: clause.target,
+          iterable: clause.iterable,
+          body,
+          otherwise: [],
+          isAsync: false,
+          line: expression.line,
+          column: expression.column,
+        } as unknown as Statement];
+      };
+      statements.push(...buildClauses(0));
+      const childCompiler = new ChunkCompiler(
+        "<genexpr>",
+        this.sourceFile,
+        true,
+        [],
+        [],
+        new Set([...this.enclosingNames, ...this.localNames]),
+        false,
+        true,
+      );
+      const childChunk = childCompiler.compile(statements);
+      this.nested.push(childChunk);
+      this.emit("MAKE_FUNCTION", this.nested.length - 1, JSON.stringify({ parameters: [], defaults: 0, isAsync: false, isGenerator: true }), expression);
+      this.emit("CALL", 0, undefined, expression);
+      return;
+    }
     const tempName = `$__thm_comp_${this.comprehensionCounter++}`;
     this.localNames.add(tempName);
     if (expression.container === "list") this.emit("BUILD_LIST", 0, undefined, expression);

@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "outDir": ".",
+    "rootDir": ".",
+    "strict": true,
+    "skipLibCheck": true,
+    "sourceMap": false
+  },
+  "include": ["./extension.ts"],
+  "exclude": ["node_modules"]
+}

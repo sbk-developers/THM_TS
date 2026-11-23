@@ -417,6 +417,8 @@ export class GeneratorValue extends ManagedObject {
   public error: unknown = undefined;
   public pendingValue: Value | undefined = undefined;
   public frame: any = null;
+  /** Iterator the generator's own in-flight loop was draining at suspend time. */
+  public loopIterator: IteratorValue | null = null;
   public fn: FunctionValue;
   public args: Value[];
   public keywords: ReadonlyMap<string, Value>;

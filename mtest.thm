@@ -1,0 +1,15 @@
+
+
+class Public{
+
+    def __init__(self,value){
+        self.value=value
+    }
+    def show(self){
+        write(self.value)
+    }
+}
+
+class HttpModule{pass}
+
+def run(){pass}

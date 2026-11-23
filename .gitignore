@@ -4,3 +4,5 @@ build/
 *.thmc
 .DS_Store
 .key
+.test.*.thm
+lib/.string.*.thm

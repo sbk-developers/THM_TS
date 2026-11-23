@@ -56,7 +56,7 @@ npm run thm -- examples/hello.thm
 
 ```sh
 ./build/thm compile examples/core.thm -o /tmp/core.thmc
-./build/thm run-bytecode /tmp/core.thmc
+./build/thm run-bc /tmp/core.thmc
 ```
 
 `Platform.clock()` is monotonic elapsed milliseconds. Files are read and
@@ -70,11 +70,18 @@ logical heap; physical memory reclamation remains controlled by the host.
 ## Modules
 
 `import name`, `import name as alias`, and `from name import member` are
-supported. THM searches the current working directory first, then `lib/`;
-each location can contain either `name.thm` or a package directory with an
-`__init__.thm`. Packages can use relative imports such as
+supported. THM searches the user-supplied `-p` paths first (in the order
+given), then the current working directory, then `lib/`; each location can
+contain either `name.thm` or a package directory with an `__init__.thm`.
+Packages can use relative imports such as
 `from .helpers import format`. Imported modules execute once per VM and keep
 their own global namespace.
+
+The built-in `req` module provides HTTP-only `get(url)` (http/https URLs via
+curl; local file access is intentionally not supported) returning a response
+object with `status` and `text`. The `bytes` module rejects non-integer
+values. Strings use Unicode code-point semantics: `len("😀") == 1`, indexing
+and iteration yield whole characters.
 
 The `random` built-in module provides `seed`, `random`, `randint`, `randrange`,
 `uniform`, `gauss`, `getrandbits`, `choice`, `choices`, `shuffle`, and `sample`.
@@ -91,7 +98,10 @@ working example: it calls `registerBuiltinModule("test_sbk", { values, functions
 and is loaded by [src/builtins/index.ts](./src/builtins/index.ts).
 
 The built-in `os` module provides `getcwd()`, `exists(path)`, `isdir(path)`,
-`listdir([path])`, and `join(...paths)`, backed by the host `Platform` API:
+`listdir([path])`, and `join(...paths)`, backed by the host `Platform` API.
+It also exposes `system(command)` (executes a host shell command — UNSAFE:
+never run untrusted THM scripts that import `os`), plus `platform()`,
+`arch()`, `version()`, and `cpus()` host information functions.
 
 ```thm
 import os

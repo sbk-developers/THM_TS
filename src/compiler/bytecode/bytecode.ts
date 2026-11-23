@@ -1,57 +1,31 @@
+/**
+ * compiler/bytecode/bytecode.ts
+ * ---------------------------------------------------------------------------
+ * THM bytecode: the on-disk format, opcode set, and (de)serialization.
+ *
+ * A Chunk is one compiled scope (module/function/class/generator). The
+ * binary container ("THMC") is versioned so old files can be rejected, and
+ * every chunk is validated with validateChunk() before it may be executed.
+ */
+
 import { CompileError } from "../../errors/errors.js";
 
+/** Container magic string and current format version. */
 export const BYTECODE_MAGIC = "THMC";
 export const BYTECODE_VERSION = 7;
 const HEADER_SIZE = 14;
 
+/** Every opcode the VM understands. */
 export type Opcode =
-  | "CONST"
-  | "LOAD"
-  | "STORE"
-  | "POP"
-  | "DUP"
-  | "DUP2"
-  | "SWAP"
-  | "ROT3"
-  | "UNARY"
-  | "BINARY"
-  | "COMPARE"
-  | "COMPARE_CHAIN"
-  | "COMPARE_JUMP"
-  | "BUILD_LIST"
-  | "BUILD_TUPLE"
-  | "BUILD_SET"
-  | "BUILD_DICT"
-  | "LIST_APPEND"
-  | "SET_ADD"
-  | "DICT_SET"
-  | "BUILD_STRING"
-  | "UNPACK_SEQUENCE"
-  | "GET_ATTR"
-  | "SET_ATTR"
-  | "DEL_ATTR"
-  | "GET_ITEM"
-  | "SET_ITEM"
-  | "GET_SLICE"
-  | "JUMP"
-  | "JUMP_IF_FALSE"
-  | "JUMP_IF_TRUE"
-  | "ITER"
-  | "ITER_NEXT"
-  | "MAKE_FUNCTION"
-  | "MAKE_CLASS"
-  | "CALL"
-  | "AWAIT"
-  | "RETURN"
-  | "HALT"
-  | "IMPORT"
-  | "RAISE"
-  | "EXC_MATCH"
-  | "DEL_NAME"
-  | "DEL_ITEM"
-  | "DEL_SLICE"
-  | "SET_SLICE"
-  | "YIELD";
+  | "CONST" | "LOAD" | "STORE" | "POP" | "DUP" | "DUP2" | "SWAP" | "ROT3"
+  | "UNARY" | "BINARY" | "COMPARE" | "COMPARE_CHAIN" | "COMPARE_JUMP"
+  | "BUILD_LIST" | "BUILD_TUPLE" | "BUILD_SET" | "BUILD_DICT" | "LIST_APPEND"
+  | "SET_ADD" | "DICT_SET" | "BUILD_STRING" | "UNPACK_SEQUENCE" | "GET_ATTR"
+  | "SET_ATTR" | "DEL_ATTR" | "GET_ITEM" | "SET_ITEM" | "GET_SLICE"
+  | "JUMP" | "JUMP_IF_FALSE" | "JUMP_IF_TRUE" | "ITER" | "ITER_NEXT"
+  | "MAKE_FUNCTION" | "MAKE_CLASS" | "CALL" | "AWAIT" | "RETURN" | "HALT"
+  | "IMPORT" | "RAISE" | "EXC_MATCH" | "DEL_NAME" | "DEL_ITEM" | "DEL_SLICE"
+  | "SET_SLICE" | "YIELD";
 
 const opcodes: Opcode[] = [
   "CONST", "LOAD", "STORE", "POP", "DUP", "DUP2", "SWAP", "ROT3", "UNARY", "BINARY",
@@ -62,6 +36,7 @@ const opcodes: Opcode[] = [
 ];
 const opcodeSet = new Set<Opcode>(opcodes);
 
+// A single bytecode instruction with source location.
 export interface Instruction {
   op: Opcode;
   a?: number;
@@ -70,6 +45,7 @@ export interface Instruction {
   column: number;
 }
 
+// An exception handler range entry.
 export interface ExceptionEntry {
   start: number;
   end: number;
@@ -80,6 +56,7 @@ export interface ExceptionEntry {
   column: number;
 }
 
+// A compiled chunk (module, function, class body, etc.).
 export interface Chunk {
   name: string;
   sourceFile: string;
@@ -94,6 +71,7 @@ export interface Chunk {
   exceptions: ExceptionEntry[];
 }
 
+// Compute the stack effect of an instruction (for validation).
 export function getStackEffect(instruction: Instruction): number {
   switch (instruction.op) {
     case "CONST":
@@ -178,6 +156,7 @@ export function getStackEffect(instruction: Instruction): number {
   }
 }
 
+// Parse the default count from MAKE_FUNCTION metadata text.
 function functionDefaultCount(instruction: Instruction): number {
   if (instruction.text === undefined) return 0;
   let metadata: unknown;
@@ -200,6 +179,7 @@ function functionDefaultCount(instruction: Instruction): number {
   return record.defaults as number;
 }
 
+// Validate MAKE_FUNCTION parameter metadata against chunk parameters.
 function validateFunctionMetadata(instruction: Instruction, parameters: string[]): void {
   const count = functionDefaultCount(instruction);
   if (instruction.text === undefined) return;
@@ -234,6 +214,7 @@ function validateFunctionMetadata(instruction: Instruction, parameters: string[]
   }
 }
 
+// Validate CALL argument metadata.
 function validateCallMetadata(instruction: Instruction): void {
   if (instruction.text === undefined) return;
   let decoded: unknown;
@@ -265,6 +246,7 @@ function validateCallMetadata(instruction: Instruction): void {
   }
 }
 
+// Require a non-negative integer operand.
 function requireOperand(instruction: Instruction, description: string): number {
   if (!Number.isInteger(instruction.a) || instruction.a! < 0) {
     throw new CompileError(`${instruction.op} requires a non-negative ${description}`);
@@ -272,11 +254,7 @@ function requireOperand(instruction: Instruction, description: string): number {
   return instruction.a!;
 }
 
-export function validateChunk(chunk: Chunk): void {
-  validateOneChunk(chunk);
-  for (const nested of chunk.nested) validateChunk(nested);
-}
-
+// Validate a single chunk (instructions, tables, jumps, control flow).
 function validateOneChunk(chunk: Chunk): void {
   if (chunk.code.length === 0) throw new CompileError(`Empty bytecode chunk ${chunk.name}`);
   for (let index = 0; index < chunk.code.length; index++) {
@@ -341,18 +319,27 @@ function validateOneChunk(chunk: Chunk): void {
   validateControlFlow(chunk);
 }
 
+// Validate a chunk and all nested chunks recursively.
+export function validateChunk(chunk: Chunk): void {
+  validateOneChunk(chunk);
+  for (const nested of chunk.nested) validateChunk(nested);
+}
+
+// Validate a table index is within bounds.
 function validateTableIndex(instruction: Instruction, length: number, table: string): void {
   if (!Number.isInteger(instruction.a) || instruction.a! < 0 || instruction.a! >= length) {
     throw new CompileError(`${instruction.op} has an invalid ${table} index`);
   }
 }
 
+// Validate a jump destination is valid and not a self-jump.
 function validateJump(instruction: Instruction, length: number, at: number): void {
   if (!Number.isInteger(instruction.a) || instruction.a! < 0 || instruction.a! >= length || instruction.a === at) {
     throw new CompileError(`${instruction.op} at ${at} has an invalid jump destination`);
   }
 }
 
+// Validate all exception table entries.
 function validateExceptionTable(chunk: Chunk): void {
   for (const entry of chunk.exceptions) {
     if (
@@ -379,6 +366,7 @@ function validateExceptionTable(chunk: Chunk): void {
   }
 }
 
+// Validate control flow and stack depths across the chunk.
 function validateControlFlow(chunk: Chunk): void {
   const depths = new Map<number, number>();
   const worklist: Array<[number, number]> = [[0, 0]];
@@ -394,8 +382,6 @@ function validateControlFlow(chunk: Chunk): void {
     depths.set(index, depth);
     const instruction = chunk.code[index]!;
     if (instruction.op === "YIELD") {
-      // Yield suspends the generator frame; the yielded value is handed to
-      // the resumer, so flow continues after the yield with an empty stack.
       if (depth !== 1) {
         throw new CompileError(`YIELD at ${index} must consume exactly one yielded value`);
       }
@@ -448,6 +434,7 @@ function validateControlFlow(chunk: Chunk): void {
   }
 }
 
+// Serialize a chunk to a bytecode Uint8Array (with header and checksum).
 export function serializeChunk(chunk: Chunk): Uint8Array {
   validateChunk(chunk);
   const writer = new BytecodeWriter();
@@ -466,6 +453,7 @@ export function serializeChunk(chunk: Chunk): Uint8Array {
   return output;
 }
 
+// Deserialize a bytecode Uint8Array back into a Chunk.
 export function deserializeChunk(serialized: Uint8Array): Chunk {
   if (serialized.length < HEADER_SIZE) {
     throw new CompileError("Malformed bytecode header");
@@ -495,6 +483,7 @@ export function deserializeChunk(serialized: Uint8Array): Chunk {
   return chunk;
 }
 
+// Writes bytecode payload bytes.
 class BytecodeWriter {
   private readonly bytes: number[] = [];
 
@@ -588,6 +577,7 @@ class BytecodeWriter {
   }
 }
 
+// Reads bytecode payload bytes.
 class BytecodeReader {
   private offset = 0;
   private readonly decoder = new TextDecoder("utf-8", { fatal: true });
@@ -706,6 +696,7 @@ class BytecodeReader {
   }
 }
 
+// FNV-1a checksum of the payload bytes.
 function checksum(bytes: Uint8Array): number {
   let value = 2166136261;
   for (const byte of bytes) {
@@ -715,6 +706,7 @@ function checksum(bytes: Uint8Array): number {
   return value >>> 0;
 }
 
+// Write a uint32 into a buffer at offset.
 function writeUint32(bytes: Uint8Array, offset: number, value: number): void {
   bytes[offset] = (value >>> 24) & 0xff;
   bytes[offset + 1] = (value >>> 16) & 0xff;
@@ -722,6 +714,7 @@ function writeUint32(bytes: Uint8Array, offset: number, value: number): void {
   bytes[offset + 3] = value & 0xff;
 }
 
+// Read a uint32 from a buffer at offset.
 function readUint32(bytes: Uint8Array, offset: number): number {
   return (
     (bytes[offset]! * 0x1000000) +
@@ -731,6 +724,7 @@ function readUint32(bytes: Uint8Array, offset: number): number {
   );
 }
 
+// Type guard for Chunk.
 function isChunk(value: unknown): value is Chunk {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
@@ -758,6 +752,7 @@ function isChunk(value: unknown): value is Chunk {
   );
 }
 
+// Type guard for Instruction.
 function isInstruction(value: unknown): value is Instruction {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
@@ -771,6 +766,7 @@ function isInstruction(value: unknown): value is Instruction {
   );
 }
 
+// Type guard for a constant value.
 function isConstant(value: unknown): value is Chunk["constants"][number] {
   return (
     value === null ||
@@ -782,6 +778,7 @@ function isConstant(value: unknown): value is Chunk["constants"][number] {
   );
 }
 
+// Type guard for an exception entry.
 function isExceptionEntry(value: unknown): value is ExceptionEntry {
   if (typeof value !== "object" || value === null) return false;
   const entry = value as Record<string, unknown>;

@@ -15,7 +15,7 @@ import {
 let client: LanguageClient | undefined;
 
 export function activate(context: ExtensionContext): void {
-  const serverModule = context.asAbsolutePath(path.join("server", "out", "cli.js"));
+  const serverModule = context.asAbsolutePath(path.join("out", "cli.js"));
 
   const serverOptions: ServerOptions = {
     run: { module: serverModule, transport: TransportKind.stdio },

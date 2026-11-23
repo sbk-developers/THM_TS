@@ -1,3 +1,10 @@
+/**
+ * builtins/modules/sys.ts
+ * ---------------------------------------------------------------------------
+ * `sys` built-in module: argv(), path() and exit() for interacting with the
+ * host process.
+ */
+
 import { registerBuiltinModule } from "../registry.js";
 import { ThmTypeError } from "../../errors/errors.js";
 import { makeList, makeNone, isKind } from "../../runtime/values.js";

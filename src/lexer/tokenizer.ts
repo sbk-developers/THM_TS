@@ -1,7 +1,26 @@
+/**
+ * lexer/tokenizer.ts
+ * ---------------------------------------------------------------------------
+ * THM lexer (tokenizer).
+ *
+ * Scans source text character by character and produces a flat token stream
+ * with line/column positions for every token. Handles:
+ *   - operators/punctuation (longest match first)
+ *   - numeric literals (decimal, hex 0x, binary 0b, octal 0o, floats, underscores)
+ *   - string literals (single/double, triple-quoted, raw r"", f-strings, bytes b"")
+ *   - comments (# to end of line) and explicit line continuations (backslash)
+ *   - implicit line joining inside (), [] and {}
+ *
+ * Keywords are emitted as `identifier` tokens; the parser distinguishes them
+ * by value so new keywords can be added without touching the lexer.
+ */
+
 import { SyntaxError } from "../errors/errors.js";
 
-export type TokenKind = "identifier" | "number" | "string" | "fstring" | "bytes" | "operator" | "newline" | "eof";
+/** The kinds of token the lexer can produce. */
+export type TokenKind =  "identifier" | "number" | "string" | "fstring" | "bytes" | "operator" | "newline" | "eof";
 
+/** One token with its source location and length (for error reporting). */
 export interface Token {
   kind: TokenKind;
   value: string;
@@ -11,6 +30,8 @@ export interface Token {
   length: number;
 }
 
+/** Operator and punctuation strings, ordered longest-match-first so `**=`
+ *  wins over `*`, `**` and `=`. */
 const operators = [
   "**=", "//=", "<<=", ">>=", ":=",
   "==", "!=", "<=", ">=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=",
@@ -19,6 +40,7 @@ const operators = [
   "+", "-", "*", "/", "%", "=", "<", ">", "!", "&", "|", "^", "~",
 ];
 
+// Operators that allow a newline to continue the current statement.
 const continuingOperators = new Set([
   ",", ":", ".", ":=", "=", "+", "-", "*", "/", "//", "%", "**", "<<", ">>",
   "==", "!=", "<", "<=", ">", ">=", "+=", "-=", "*=", "/=", "//=", "%=", "**=",
@@ -26,6 +48,7 @@ const continuingOperators = new Set([
   "and", "or", "not", "is", "in",
 ]);
 
+/** The lexer: converts source text into a token stream. */
 export class Lexer {
   private offset = 0;
   private line = 1;
@@ -38,9 +61,11 @@ export class Lexer {
     private readonly source: string,
     private readonly file = "<stdin>",
   ) {
+    // Skip UTF-8 BOM if present.
     if (source.startsWith("\uFEFF")) this.offset = 1;
   }
 
+  /** Scan the entire source and return the complete token array. */
   tokenize(): Token[] {
     while (!this.atEnd()) {
       const char = this.peek();
@@ -76,6 +101,8 @@ export class Lexer {
     return this.tokens;
   }
 
+  /** Handle a newline; emit a token unless inside brackets or after a
+   *  continuing operator (implicit line joining). */
   private readNewline(): void {
     const start = this.position();
     const startOffset = this.offset;
@@ -91,6 +118,7 @@ export class Lexer {
     this.pushToken("newline", "\n", start, startOffset);
   }
 
+  /** Handle an explicit line continuation (a backslash right before a newline). */
   private readExplicitContinuation(): void {
     const start = this.position();
     this.advance();
@@ -101,10 +129,12 @@ export class Lexer {
     while (this.peek() === " " || this.peek() === "\t") this.advance();
   }
 
+  /** Skip a `#` comment up to (not including) the newline. */
   private skipComment(): void {
     while (!this.atEnd() && this.peek() !== "\r" && this.peek() !== "\n") this.advance();
   }
 
+  /** Read an identifier; keywords stay tagged "identifier" for the parser. */
   private readIdentifier(): void {
     const start = this.position();
     const startOffset = this.offset;
@@ -113,6 +143,7 @@ export class Lexer {
     this.pushToken("identifier", value, start, startOffset);
   }
 
+  /** Read a numeric literal: 0x/0b/0o integers, decimals, floats, exponents. */
   private readNumber(): void {
     const start = this.position();
     const startOffset = this.offset;
@@ -157,6 +188,7 @@ export class Lexer {
     this.pushToken("number", value, start, startOffset);
   }
 
+  /** Read digits of a literal, allowing single `_` separators between digits. */
   private readDigitSequence(valid: (char: string) => boolean, start: { line: number; column: number }): string {
     let value = "";
     let sawDigit = false;
@@ -176,6 +208,8 @@ export class Lexer {
     return value;
   }
 
+  /** Read a string literal. Supports prefixes (f/r/b and combos), triple
+   *  quotes, escape sequences, and `{expr}` interpolation inside f-strings. */
   private readString(prefixLength: number): void {
     const start = this.position();
     const startOffset = this.offset;
@@ -263,6 +297,7 @@ export class Lexer {
     throw new SyntaxError("Unterminated string literal", start);
   }
 
+  /** Read one escape sequence after a backslash (\n, \xHH, \uHHHH, ...). */
   private readEscape(): string {
     const start = this.position();
     this.advance();
@@ -282,6 +317,7 @@ export class Lexer {
     }
   }
 
+  /** Read a hex escape of `digits` hex characters (\xHH = 2, \uHHHH = 4). */
   private readHexEscape(digits: number, start: { line: number; column: number }): string {
     let value = 0;
     for (let index = 0; index < digits; index++) {
@@ -293,6 +329,9 @@ export class Lexer {
     return String.fromCharCode(value);
   }
 
+  /** Match an operator/punctuation token; also tracks bracket depth so that
+   *  newlines inside () and [] do not terminate the statement. `;` is
+   *  normalized to a newline token (statement separator). */
   private readOperatorOrPunctuation(): void {
     const start = this.position();
     const startOffset = this.offset;
@@ -312,21 +351,26 @@ export class Lexer {
     throw new SyntaxError(`Unexpected character ${JSON.stringify(this.peek())}`, start);
   }
 
+  /** Consume a newline inside a multi-line string and return "\n". */
   private consumeStringNewline(): string {
     this.advanceNewline();
     return "\n";
   }
 
+  /** Advance over one character inside an f-string interpolation block. */
   private advanceStringCharacter(): string {
     if (this.peek() === "\r" || this.peek() === "\n") return this.consumeStringNewline();
     return this.advance();
   }
 
+  /** True when the current position starts the string's closing quote. */
   private atStringDelimiter(quote: string, triple: boolean): boolean {
     if (this.peek() !== quote) return false;
     return !triple || (this.peek(1) === quote && this.peek(2) === quote);
   }
 
+  /** Detect a string prefix (f, r, b or two-letter combos like fr) at the
+   *  current position; returns its length (0, 1 or 2). */
   private stringPrefixLength(): number {
     const first = this.peek().toLowerCase();
     if (first === "f" || first === "r" || first === "b") {
@@ -337,6 +381,7 @@ export class Lexer {
     return 0;
   }
 
+  /** Advance past a newline sequence (CRLF or LF), updating line/column. */
   private advanceNewline(): void {
     if (this.peek() === "\r") {
       this.offset++;
@@ -348,6 +393,7 @@ export class Lexer {
     this.column = 1;
   }
 
+  /** Advance one character and return it. */
   private advance(): string {
     const char = this.source[this.offset] ?? "";
     this.offset++;
@@ -355,6 +401,7 @@ export class Lexer {
     return char;
   }
 
+  /** Record a token spanning from `start` to the current position. */
   private pushToken(
     kind: TokenKind,
     value: string,
@@ -371,26 +418,32 @@ export class Lexer {
     });
   }
 
+  /** Current line/column, used as the start of the next token. */
   private position(): { line: number; column: number } {
     return { line: this.line, column: this.column };
   }
 
+  /** Look at a character `distance` positions ahead ("" if past the end). */
   private peek(distance = 0): string {
     return this.source[this.offset + distance] ?? "";
   }
 
+  /** Character classification helpers used by the scanner. */
   private atEnd(): boolean {
     return this.offset >= this.source.length;
   }
 
+  /** True for `'` or `"`. */
   private isQuote(char: string): boolean {
     return char === "'" || char === '"';
   }
 
+  /** True for ASCII decimal digits. */
   private isDigit(char: string): boolean {
     return char >= "0" && char <= "9";
   }
 
+  /** Numeric value of a hex digit, or -1 if not a hex digit. */
   private digitValue(char: string): number {
     if (this.isDigit(char)) return char.charCodeAt(0) - 48;
     if (char >= "a" && char <= "f") return char.charCodeAt(0) - 87;
@@ -398,15 +451,18 @@ export class Lexer {
     return -1;
   }
 
+  /** True if `char` may start an identifier (letter or underscore). */
   private isIdentifierStart(char: string): boolean {
     return (char >= "a" && char <= "z") || (char >= "A" && char <= "Z") || char === "_";
   }
 
+  /** True if `char` may continue an identifier (identifier-start or digit). */
   private isIdentifierPart(char: string): boolean {
     return this.isIdentifierStart(char) || this.isDigit(char);
   }
 }
 
+// Tokenize a source string in one call.
 export function tokenize(source: string, file = "<stdin>"): Token[] {
   return new Lexer(source, file).tokenize();
 }

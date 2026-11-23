@@ -1,8 +1,20 @@
+/**
+ * semantic-analyzer/analyzer.ts
+ * ---------------------------------------------------------------------------
+ * Scope analysis pass run before code generation.
+ *
+ * For each function/class/module body it determines which names are locals,
+ * globals, nonlocals, or captured from enclosing scopes, and validates
+ * await/yield usage and assignment targets. The compiler consumes the result
+ * to pick LOAD/STORE modes and closure cells.
+ */
+
 import type { Expr, Statement } from "../parser/ast.js";
 import { SyntaxError } from "../errors/errors.js";
 import { collectLocalNames, collectScopeDeclarations, validateAssignmentTarget, validateControlStatements } from "./scope.js";
 import { SymbolTable } from "./symbol-table.js";
 
+/** Scope classification of every name used in one body. */
 export interface ScopeAnalysis {
   localNames: Set<string>;
   globalNames: Set<string>;
@@ -10,6 +22,7 @@ export interface ScopeAnalysis {
   capturedNames: Set<string>;
 }
 
+// Options for analyzing a scope.
 export interface ScopeOptions {
   isFunction: boolean;
   parameters: string[];
@@ -18,6 +31,7 @@ export interface ScopeOptions {
   allowYield?: boolean;
 }
 
+// Analyze scope for a list of statements.
 export function analyzeScope(statements: Statement[], options: ScopeOptions): ScopeAnalysis {
   const symbols = new SymbolTable(options.enclosingNames, options.isFunction);
   collectScopeDeclarations(statements, (scope, name) => {
@@ -57,6 +71,7 @@ export function analyzeScope(statements: Statement[], options: ScopeOptions): Sc
   };
 }
 
+// Recursively analyze child scopes (functions and classes).
 function analyzeChildScopes(
   statements: Statement[],
   enclosingNames: ReadonlySet<string>,
@@ -84,6 +99,7 @@ function analyzeChildScopes(
   }
 }
 
+// Validate all assignment targets in a statement tree.
 function validateTargetsInStatement(statement: Statement): void {
   if (statement.kind === "assign") {
     for (const target of statement.targets) validateAssignmentTarget(target, statement.line, statement.column);
@@ -97,6 +113,7 @@ function validateTargetsInStatement(statement: Statement): void {
   for (const child of nestedStatements(statement)) validateTargetsInStatement(child);
 }
 
+// Return the nested statement lists of a compound statement.
 function nestedStatements(statement: Statement): Statement[] {
   if (statement.kind === "switch") {
     return [...statement.cases.flatMap((clause) => clause.body), ...statement.defaultBody];
@@ -115,6 +132,7 @@ function nestedStatements(statement: Statement): Statement[] {
   return [];
 }
 
+// Collect captured names (free variables) from statements.
 function collectCapturesInStatements(statements: Statement[], symbols: SymbolTable): void {
   const visitExpression = (expression: Expr): void => {
     switch (expression.kind) {
@@ -154,9 +172,6 @@ function collectCapturesInStatements(statements: Statement[], symbols: SymbolTab
         return;
       case "await":
         visitExpression(expression.value);
-        return;
-      case "yield":
-        if (expression.value !== undefined) visitExpression(expression.value);
         return;
       case "yield":
         if (expression.value !== undefined) visitExpression(expression.value);
@@ -251,6 +266,7 @@ function collectCapturesInStatements(statements: Statement[], symbols: SymbolTab
   }
 }
 
+// Validate that await only appears inside async functions.
 function validateAwaitInStatements(statements: Statement[], allowAwait: boolean): void {
   const visitExpression = (expression: Expr): void => {
     switch (expression.kind) {
@@ -377,6 +393,7 @@ function validateAwaitInStatements(statements: Statement[], allowAwait: boolean)
   }
 }
 
+// Validate that yield only appears inside generator functions.
 function validateYieldInStatements(statements: Statement[], inFunction: boolean, allowYield: boolean): void {
   const visitExpression = (expression: Expr): void => {
     switch (expression.kind) {

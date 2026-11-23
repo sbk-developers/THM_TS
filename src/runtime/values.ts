@@ -1,12 +1,30 @@
+/**
+ * runtime/values.ts
+ * ---------------------------------------------------------------------------
+ * THM runtime value model.
+ *
+ * Every THM value that can participate in reference cycles lives on a
+ * ManagedHeap (see vm/memory.ts) and extends ManagedObject. This module
+ * declares those value classes (list, tuple, dict, set, bytes, function,
+ * class, instance, generator, coroutine, ...), the Environment (scope chain
+ * with closure cells), and the `make*` factory functions used by the VM and
+ * built-ins to allocate values.
+ *
+ * Each class implements references()/clearReferences() so the mark-and-sweep
+ * garbage collector can walk the object graph.
+ */
+
 import type { Chunk } from "../compiler/bytecode/bytecode.js";
 import { ManagedHeap, ManagedObject } from "../vm/memory.js";
 import type { VM } from "../vm/vm.js";
 
+/** A closure cell: one mutable binding captured by one or more functions. */
 export interface Cell {
   bound: boolean;
   value: Value | null;
 }
 
+/** An environment (scope): local cells, parent link, and a global flag. */
 export class Environment extends ManagedObject {
   readonly cells = new Map<string, Cell>();
   module: ModuleValue | null = null;
@@ -23,6 +41,7 @@ export class Environment extends ManagedObject {
     return heap.allocate((heapId) => new Environment(heapId, parent, isGlobal));
   }
 
+  // Declare (or return existing) a cell for a name.
   declare(name: string): Cell {
     let cell = this.cells.get(name);
     if (cell === undefined) {
@@ -32,12 +51,14 @@ export class Environment extends ManagedObject {
     return cell;
   }
 
+  // Set a name to a value in this environment.
   set(name: string, value: Value): void {
     const cell = this.declare(name);
     cell.value = value;
     cell.bound = true;
   }
 
+  // Return managed object references for GC.
   references(): ManagedObject[] {
     const refs: ManagedObject[] = [];
     for (const cell of this.cells.values()) {
@@ -48,6 +69,7 @@ export class Environment extends ManagedObject {
     return refs;
   }
 
+  // Clear all references for GC.
   clearReferences(): void {
     for (const cell of this.cells.values()) {
       cell.bound = false;
@@ -59,9 +81,9 @@ export class Environment extends ManagedObject {
   }
 }
 
+/** A mutable list value. */
 export class ListValue extends ManagedObject {
   readonly kind = "list";
-
   readonly items: Value[];
 
   constructor(heapId: number, items: Value[]) {
@@ -78,9 +100,9 @@ export class ListValue extends ManagedObject {
   }
 }
 
+/** An immutable tuple value. */
 export class TupleValue extends ManagedObject {
   readonly kind = "tuple";
-
   readonly items: Value[];
 
   constructor(heapId: number, items: Value[]) {
@@ -97,15 +119,16 @@ export class TupleValue extends ManagedObject {
   }
 }
 
+/** One dict entry: key, stored value and cached key hash. */
 export interface DictEntry {
   key: Value;
   value: Value;
   hash: string;
 }
 
+/** A dict value: insertion-ordered key/value mapping. */
 export class DictValue extends ManagedObject {
   readonly kind = "dict";
-
   constructor(heapId: number, public entries: DictEntry[]) {
     super(heapId);
     this.entries = [...entries];
@@ -122,9 +145,9 @@ export class DictValue extends ManagedObject {
   }
 }
 
+/** A set value: unique members with insertion order preserved. */
 export class SetValue extends ManagedObject {
   readonly kind = "set";
-
   readonly items: Value[];
 
   constructor(heapId: number, items: Value[]) {
@@ -141,9 +164,9 @@ export class SetValue extends ManagedObject {
   }
 }
 
+/** An immutable bytes value backed by a Uint8Array. */
 export class BytesValue extends ManagedObject {
   readonly kind = "bytes";
-
   constructor(heapId: number, public data: Uint8Array) {
     super(heapId);
   }
@@ -157,9 +180,9 @@ export class BytesValue extends ManagedObject {
   }
 }
 
+/** The None singleton value (one per heap). */
 export class NoneValue extends ManagedObject {
   readonly kind = "none";
-
   constructor(heapId: number) {
     super(heapId);
   }
@@ -171,6 +194,7 @@ export class NoneValue extends ManagedObject {
   clearReferences(): void {}
 }
 
+/** A user-defined function value: chunk, closure environment and defaults. */
 export class FunctionValue extends ManagedObject {
   readonly kind = "function";
   readonly genericParameters: string[];
@@ -202,12 +226,14 @@ export class FunctionValue extends ManagedObject {
   }
 }
 
+/** Static description of one function parameter (name + default flag). */
 export interface FunctionParameterSpec {
   name: string;
   kind: "positional" | "vararg" | "keywordOnly" | "kwarg";
   hasDefault: boolean;
 }
 
+/** Signature of a host-implemented (native) function callback. */
 export type NativeCallback = (
   vm: VM,
   receiver: Value | undefined,
@@ -215,6 +241,7 @@ export type NativeCallback = (
   keywords?: ReadonlyMap<string, Value>,
 ) => Value;
 
+/** A native function value wrapping a host callback (built-ins, modules). */
 export class NativeValue extends ManagedObject {
   readonly kind = "native";
 
@@ -237,6 +264,7 @@ export class NativeValue extends ManagedObject {
   }
 }
 
+/** A module value: an imported module's environment plus its name. */
 export class ModuleValue extends ManagedObject {
   readonly kind = "module";
 
@@ -257,6 +285,7 @@ export class ModuleValue extends ManagedObject {
   clearReferences(): void {}
 }
 
+/** A lazy range value (start, stop, step) materialized on iteration. */
 export class RangeValue extends ManagedObject {
   readonly kind = "range";
   readonly length: number;
@@ -275,7 +304,7 @@ export class RangeValue extends ManagedObject {
   clearReferences(): void {}
 }
 
-
+/** A class value: name, base classes, members, and the computed MRO. */
 export class ClassValue extends ManagedObject {
   readonly kind = "class";
 
@@ -300,8 +329,10 @@ export class ClassValue extends ManagedObject {
   clearReferences(): void { this.bases = []; this.mro = []; this.metaclass = null; }
 }
 
+/** The three descriptor kinds THM supports. */
 export type DescriptorKind = "staticmethod" | "classmethod" | "property";
 
+/** A descriptor wrapping a function (staticmethod/classmethod/property). */
 export class DescriptorValue extends ManagedObject {
   readonly kind = "descriptor";
 
@@ -324,6 +355,7 @@ export class DescriptorValue extends ManagedObject {
   }
 }
 
+/** An instance of a class: reference to the class plus its attribute dict. */
 export class InstanceValue extends ManagedObject {
   readonly kind = "instance";
   readonly fields = new Map<string, Value>();
@@ -333,7 +365,7 @@ export class InstanceValue extends ManagedObject {
   clearReferences(): void { this.fields.clear(); }
 }
 
-
+/** The object returned by super(): a class MRO walk bound to an instance. */
 export class SuperValue extends ManagedObject {
   readonly kind = "super";
   constructor(
@@ -350,6 +382,7 @@ export class SuperValue extends ManagedObject {
   clearReferences(): void { this.instance = null; this.startClass = null; }
 }
 
+/** A type object, e.g. returned by type(x): names a runtime value kind. */
 export class TypeValue extends ManagedObject {
   readonly kind = "type";
 
@@ -364,6 +397,7 @@ export class TypeValue extends ManagedObject {
   clearReferences(): void {}
 }
 
+/** A raised exception value: class name, message, and caught-exception args. */
 export class ExceptionValue extends ManagedObject {
   readonly kind = "exception";
 
@@ -377,6 +411,7 @@ export class ExceptionValue extends ManagedObject {
   clearReferences(): void {}
 }
 
+/** A coroutine: a suspended async function body awaiting await/resume. */
 export class CoroutineValue extends ManagedObject {
   readonly kind = "coroutine";
   public done = false;
@@ -409,6 +444,7 @@ export class CoroutineValue extends ManagedObject {
   }
 }
 
+/** A generator: a suspended function body resumed by ITER_NEXT. */
 export class GeneratorValue extends ManagedObject {
   readonly kind = "generator";
   public done = false;
@@ -458,7 +494,7 @@ export class GeneratorValue extends ManagedObject {
   }
 }
 
-
+/** Per-kind iteration state for IteratorValue (what is being iterated). */
 export type IteratorState =
   | { kind: "sequence"; source: ListValue | TupleValue; index: number; step: 1 | -1 }
   | { kind: "string"; source: string; index: number; step: 1 | -1 }
@@ -473,6 +509,7 @@ export type IteratorState =
   | { kind: "reverse-string"; source: string; index: number }
   | { kind: "generator"; source: GeneratorValue };
 
+/** An iterator over a list/tuple/dict/set/range/generator. */
 export class IteratorValue extends ManagedObject {
   readonly kind = "iterator";
 
@@ -489,6 +526,7 @@ export class IteratorValue extends ManagedObject {
   }
 }
 
+/** Discriminated union of every managed THM value. */
 export type Value =
   | boolean
   | bigint
@@ -516,6 +554,7 @@ export type Value =
 
 type ObjectValue = Exclude<Value, boolean | bigint | number | string>;
 
+/** Type guard: is `value` a managed object of the given `kind`? */
 export function isKind<K extends ObjectValue["kind"]>(
   value: Value,
   kind: K,
@@ -523,6 +562,7 @@ export function isKind<K extends ObjectValue["kind"]>(
   return typeof value === "object" && value !== null && value.kind === kind;
 }
 
+/** Collect the managed objects referenced by an array of values (for GC). */
 export function managedReferences(values: Value[]): ManagedObject[] {
   const refs: ManagedObject[] = [];
   for (const value of values) {
@@ -549,6 +589,9 @@ export function managedReferences(values: Value[]): ManagedObject[] {
   return refs;
 }
 
+// -------- Factory functions --------
+
+/** Allocate a list, copying the given items. */
 export function makeList(heap: ManagedHeap, items: Value[] = []): ListValue {
   const copy: Value[] = [];
   for (const item of items) copy.push(item);
@@ -556,32 +599,38 @@ export function makeList(heap: ManagedHeap, items: Value[] = []): ListValue {
 }
 export const __listCopyMarker = true;
 
+/** Allocate a tuple, copying the given items. */
 export function makeTuple(heap: ManagedHeap, items: Value[] = []): TupleValue {
   const copy: Value[] = [];
   for (const item of items) copy.push(item);
   return heap.allocate((heapId) => new TupleValue(heapId, copy));
 }
 
+/** Allocate a dict from pre-hashed entries. */
 export function makeDict(heap: ManagedHeap, entries: DictEntry[] = []): DictValue {
   const copy: DictEntry[] = [];
   for (const entry of entries) copy.push(entry);
   return heap.allocate((heapId) => new DictValue(heapId, copy));
 }
 
+/** Allocate a set, copying the given items. */
 export function makeSet(heap: ManagedHeap, items: Value[] = []): SetValue {
   const copy: Value[] = [];
   for (const item of items) copy.push(item);
   return heap.allocate((heapId) => new SetValue(heapId, copy));
 }
 
+/** Allocate an immutable bytes value from raw data. */
 export function makeBytes(heap: ManagedHeap, data: Uint8Array): BytesValue {
   return heap.allocate((heapId) => new BytesValue(heapId, data));
 }
 
+/** Allocate the None singleton for this heap. */
 export function makeNone(heap: ManagedHeap): NoneValue {
   return heap.allocate((heapId) => new NoneValue(heapId));
 }
 
+/** Allocate a user-defined function bound to a closure environment. */
 export function makeFunction(
   heap: ManagedHeap,
   name: string,
@@ -595,10 +644,12 @@ export function makeFunction(
   return heap.allocate((heapId) => new FunctionValue(heapId, name, chunk, closure, parameterSpecs, defaults, isAsync, isGenerator));
 }
 
+/** Allocate a generator bound to its function and call arguments. */
 export function makeGenerator(heap: ManagedHeap, name: string, fn: FunctionValue, args: Value[], keywords: ReadonlyMap<string, Value>): GeneratorValue {
   return heap.allocate((heapId) => new GeneratorValue(heapId, name, fn, args, keywords));
 }
 
+/** Allocate a native (host) function with optional captured values. */
 export function makeNative(
   heap: ManagedHeap,
   name: string,
@@ -609,18 +660,22 @@ export function makeNative(
   return heap.allocate((heapId) => new NativeValue(heapId, name, callback, captures, acceptsKeywords));
 }
 
+/** Allocate a lazy range(start, stop, step). */
 export function makeRange(heap: ManagedHeap, start: number, stop: number, step: number): RangeValue {
   return heap.allocate((heapId) => new RangeValue(heapId, start, stop, step));
 }
 
+/** Allocate a type object with the given name. */
 export function makeType(heap: ManagedHeap, name: string): TypeValue {
   return heap.allocate((heapId) => new TypeValue(heapId, name));
 }
 
+/** Allocate an exception value of the given type and message. */
 export function makeException(heap: ManagedHeap, exceptionType: string, message: string): ExceptionValue {
   return heap.allocate((heapId) => new ExceptionValue(heapId, exceptionType, message));
 }
 
+/** Allocate a class value, computing its C3 method resolution order. */
 export function makeClass(
   heap: ManagedHeap,
   name: string,
@@ -637,6 +692,7 @@ export function makeClass(
   return klass;
 }
 
+/** Allocate a descriptor (staticmethod/classmethod/property). */
 export function makeDescriptor(
   heap: ManagedHeap,
   descriptorKind: DescriptorKind,
@@ -649,6 +705,7 @@ export function makeDescriptor(
   );
 }
 
+/** Compute the C3 linearization (MRO) of a class from its base classes. */
 function computeMro(klass: ClassValue): ClassValue[] {
   const sequences = klass.bases.map((base) => [...base.mro]);
   sequences.push([...klass.bases]);
@@ -669,10 +726,12 @@ function computeMro(klass: ClassValue): ClassValue[] {
   return result;
 }
 
+/** Allocate an instance of a class with an empty attribute dict. */
 export function makeInstance(heap: ManagedHeap, klass: ClassValue): InstanceValue {
   return heap.allocate((heapId) => new InstanceValue(heapId, klass));
 }
 
+/** Allocate a super() proxy walking a class MRO for an instance. */
 export function makeSuper(
   heap: ManagedHeap,
   instance: InstanceValue | ClassValue,
@@ -681,10 +740,12 @@ export function makeSuper(
   return heap.allocate((heapId) => new SuperValue(heapId, instance, startClass));
 }
 
+/** Allocate an iterator over the given state. */
 export function makeIterator(heap: ManagedHeap, state: IteratorState): IteratorValue {
   return heap.allocate((heapId) => new IteratorValue(heapId, state));
 }
 
+/** Allocate a coroutine bound to its async function and arguments. */
 export function makeCoroutine(
   heap: ManagedHeap,
   name: string,
@@ -695,6 +756,7 @@ export function makeCoroutine(
   return heap.allocate((heapId) => new CoroutineValue(heapId, name, fn, args, keywords));
 }
 
+/** Managed objects referenced by an iterator state (roots for the GC). */
 function iteratorReferences(state: IteratorState): ManagedObject[] {
   switch (state.kind) {
     case "sequence":

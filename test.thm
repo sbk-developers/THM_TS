@@ -1,20 +1,9 @@
 
-# File: test.thm
-class OBJ{
-    def __init__(self){
-        self.name="sobuj"
-    }
-}
 
-cls = OBJ()
 
-write(cls.name)
+write("😉" == "😉")
+print("😉")
 
-switch (29){
-    case 30{
-        write(30)
-    }case 20: write(20)
-    default{
-        write(29)
-    }
+except write("hello") as e{
+    write(e)
 }

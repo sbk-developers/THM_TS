@@ -1,6 +1,15 @@
+/**
+ * semantic-analyzer/scope.ts
+ * ---------------------------------------------------------------------------
+ * Scope analysis helpers: collect global/nonlocal declarations, gather local
+ * names, and validate assignment targets and control statements (break/
+ * continue outside loops, return outside functions, ...).
+ */
+
 import type { Statement } from "../parser/ast.js";
 import { SyntaxError } from "../errors/errors.js";
 
+// Visit all statements and report global/nonlocal declarations.
 export function collectScopeDeclarations(
   statements: Statement[],
   onDeclaration: (scope: "global" | "nonlocal", name: string) => void,
@@ -27,6 +36,7 @@ export function collectScopeDeclarations(
   visit(statements);
 }
 
+// Collect locally defined names from statements and parameters.
 export function collectLocalNames(
   statements: Statement[],
   parameters: string[],
@@ -85,6 +95,7 @@ export function collectLocalNames(
 
 type StatementTarget = Extract<Statement, { kind: "assign" }>["targets"][number];
 
+// Validate that an assignment target is a valid lvalue.
 export function validateAssignmentTarget(target: StatementTarget, line: number, column: number): void {
   if (
     target.kind === "name" ||
@@ -99,6 +110,7 @@ export function validateAssignmentTarget(target: StatementTarget, line: number, 
   throw new SyntaxError("Invalid assignment target", { line, column });
 }
 
+// Validate break/continue/return placement in statements.
 export function validateControlStatements(
   statements: Statement[],
   isFunction: boolean,

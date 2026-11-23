@@ -1,8 +1,20 @@
+/**
+ * platform/platform.ts
+ * ---------------------------------------------------------------------------
+ * Platform abstraction layer.
+ *
+ * Everything the VM and CLI need from the host (filesystem, process args,
+ * clock, stdio) goes through the Platform interface, so the interpreter is
+ * portable and unit-testable: tests install a fake platform with
+ * setPlatformForTests() instead of touching the real filesystem.
+ */
+
 import * as fs from "node:fs";
 import * as path from "node:path";
 import process from "node:process";
 import { performance } from "node:perf_hooks";
 
+/** Host operations consumed by the VM and CLI. All paths are relative to cwd. */
 export interface Platform {
   readFile(filePath: string): string;
   writeFile(filePath: string, contents: string): void;
@@ -22,6 +34,7 @@ export interface Platform {
   readLine?(): string | null;
 }
 
+/** Error thrown when a host operation fails (wraps the underlying cause). */
 export class PlatformError extends Error {
   constructor(operation: string, target: string, cause: unknown) {
     const detail =
@@ -35,11 +48,13 @@ export class PlatformError extends Error {
   }
 }
 
+/** Decode UTF-8 bytes and strip a trailing carriage return. */
 function decodeUtf8(bytes: number[]): string {
   const text = new TextDecoder().decode(new Uint8Array(bytes));
   return text.endsWith("\r") ? text.slice(0, -1) : text;
 }
 
+/** Run a host call, wrapping any failure in a descriptive PlatformError. */
 function platformCall<T>(operation: string, target: string, action: () => T): T {
   try {
     return action();
@@ -48,6 +63,7 @@ function platformCall<T>(operation: string, target: string, action: () => T): T 
   }
 }
 
+/** Native Node.js implementation of the Platform interface. */
 export function createNativePlatform(): Platform {
   const resolve = (filePath: string): string =>
     path.isAbsolute(filePath) ? filePath : path.resolve(process.cwd(), filePath);
@@ -122,12 +138,15 @@ export function createNativePlatform(): Platform {
   };
 }
 
+/** Currently active platform instance (defaults to the native Node one). */
 let activePlatform: Platform = createNativePlatform();
 
+/** Get the active platform. */
 export function getPlatform(): Platform {
   return activePlatform;
 }
 
+/** Swap the platform for a test double; returns a restore function. */
 export function setPlatformForTests(platform: Platform): () => void {
   const previous = activePlatform;
   activePlatform = platform;

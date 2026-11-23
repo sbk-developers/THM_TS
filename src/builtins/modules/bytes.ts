@@ -1,8 +1,16 @@
+/**
+ * builtins/modules/bytes.ts
+ * ---------------------------------------------------------------------------
+ * `bytes` built-in module: construction, length, indexing, slicing,
+ * encode/decode, and hex conversion for bytes values.
+ */
+
 import { ThmTypeError, ThmValueError, ThmIndexError } from "../../errors/errors.js";
 import type { NativeCallback, Value } from "../../runtime/values.js";
 import { makeBytes } from "../../runtime/values.js";
 import { registerBuiltinModule } from "../registry.js";
 
+/** bytes(x): accepts bytes (identity), str (UTF-8) or iterable of ints. */
 const bytesFromIterable: NativeCallback = (vm, _receiver, args) => {
   if (args.length !== 1) throw new ThmTypeError("bytes() takes exactly one argument");
   const value = args[0]!;
@@ -19,6 +27,7 @@ const bytesFromIterable: NativeCallback = (vm, _receiver, args) => {
         throw new ThmTypeError("bytes() argument must be an iterable of integers");
       }
       const intVal = typeof item === "bigint" ? Number(item) : item;
+      if (!Number.isSafeInteger(intVal)) throw new ThmTypeError("bytes() argument must be an iterable of integers");
       if (intVal < 0 || intVal > 255) throw new ThmValueError("bytes() argument must be in range(0, 256)");
       bytes.push(intVal);
     }
@@ -27,6 +36,7 @@ const bytesFromIterable: NativeCallback = (vm, _receiver, args) => {
   throw new ThmTypeError("bytes() argument must be bytes, string, or iterable of integers");
 };
 
+// Return the length of a bytes value.
 const len: NativeCallback = (_vm, _receiver, args) => {
   if (args.length !== 1) throw new ThmTypeError("len() takes exactly one argument");
   const value = args[0]!;
@@ -34,6 +44,7 @@ const len: NativeCallback = (_vm, _receiver, args) => {
   throw new ThmTypeError("len() argument must be bytes");
 };
 
+// Get a byte by index.
 const getitem: NativeCallback = (_vm, _receiver, args) => {
   if (args.length !== 2) throw new ThmTypeError("getitem() takes exactly two arguments");
   const bytesVal = args[0]!;
@@ -45,6 +56,7 @@ const getitem: NativeCallback = (_vm, _receiver, args) => {
   return BigInt(bytesVal.data[idx]);
 };
 
+// Slice bytes with start, stop, step.
 const slice: NativeCallback = (_vm, _receiver, args) => {
   if (args.length !== 4) throw new ThmTypeError("slice() takes exactly four arguments");
   const bytesVal = args[0]!;
@@ -62,6 +74,7 @@ const slice: NativeCallback = (_vm, _receiver, args) => {
   return makeBytes(_vm.heap, new Uint8Array(result));
 };
 
+// Decode bytes to string.
 const decode: NativeCallback = (_vm, _receiver, args) => {
   if (args.length < 1 || args.length > 2) throw new ThmTypeError("decode() takes one or two arguments");
   const bytesVal = args[0]!;
@@ -72,6 +85,7 @@ const decode: NativeCallback = (_vm, _receiver, args) => {
   return decoder.decode(bytesVal.data);
 };
 
+// Encode string to bytes.
 const encode: NativeCallback = (_vm, _receiver, args) => {
   if (args.length < 1 || args.length > 2) throw new ThmTypeError("encode() takes one or two arguments");
   const str = args[0]!;
@@ -82,6 +96,7 @@ const encode: NativeCallback = (_vm, _receiver, args) => {
   return makeBytes(_vm.heap, encoder.encode(str));
 };
 
+// Return hex representation of bytes.
 const hex: NativeCallback = (_vm, _receiver, args) => {
   if (args.length !== 1) throw new ThmTypeError("hex() takes exactly one argument");
   const bytesVal = args[0]!;
@@ -95,6 +110,7 @@ const hex: NativeCallback = (_vm, _receiver, args) => {
   return result;
 };
 
+// Construct bytes from a hex string.
 const fromhex: NativeCallback = (_vm, _receiver, args) => {
   if (args.length !== 1) throw new ThmTypeError("fromhex() takes exactly one argument");
   const str = args[0]!;

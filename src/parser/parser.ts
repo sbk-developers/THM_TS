@@ -1,7 +1,22 @@
+/**
+ * parser/parser.ts
+ * ---------------------------------------------------------------------------
+ * Recursive-descent parser for the THM language.
+ *
+ * Consumes the token stream produced by the lexer and builds an AST
+ * (see parser/ast.ts). Operator precedence is driven by the binaryPrecedence
+ * table below; statements and expressions each get a dedicated parse method.
+ *
+ * Public entry points:
+ *   parse()            - source text -> Program (full module AST)
+ *   parseExpression()  - source text -> a single Expr (REPL / tooling use)
+ */
 import type { Expr, Parameter, Program, Statement } from "./ast.js";
 import { SyntaxError } from "../errors/errors.js";
 import { tokenize, type Token } from "../lexer/tokenizer.js";
 
+// Binary operator precedence (higher binds tighter). Shared keywords such as
+// `or`, `and`, `in` and `is` sit alongside symbolic operators.
 const binaryPrecedence: Record<string, number> = {
   or: 1,
   and: 2,
@@ -27,8 +42,10 @@ const binaryPrecedence: Record<string, number> = {
   "**": 11,
 };
 
+// Operators that may appear after a name to form an assignment statement.
 const assignmentOperators = new Set(["=", "+=", "-=", "*=", "/=", "//=", "%=", "**=", "&=", "|=", "^=", "<<=", ">>="]);
 
+/** Recursive-descent parser over a pre-tokenized stream. */
 export class Parser {
   private current = 0;
 
@@ -92,6 +109,8 @@ export class Parser {
     if (word === "async" && this.peek(1).value === "with") {
       throw this.error("async with is not supported");
     }
+    // Statement dispatch: match a leading keyword and hand off to the
+    // corresponding parse method. Anything else is a simple statement.
     if (this.matchKeyword("def")) return [this.parseFunction(decorators)];
     if (this.matchKeyword("class")) return [this.parseClass(decorators)];
     if (this.checkKeyword("del") && !assignmentAfterName) {
@@ -949,6 +968,7 @@ export class Parser {
     return false;
   }
 
+  // Look ahead one token; used by statement disambiguation (e.g. `match {`).
   private peekComparisonOperator(): string | undefined {
     if (this.checkKeyword("is") && this.peek(1).value === "not") return "is not";
     if (this.matchAhead("==", "!=", "<", "<=", ">", ">=", "in", "is")) return this.peek().value;
@@ -956,6 +976,7 @@ export class Parser {
     return undefined;
   }
 
+  // Consume a comparison operator, collapsing keyword pairs (`not in`, `is not`).
   private consumeComparisonOperator(): string {
     if (this.matchKeyword("not")) {
       this.consumeKeyword("in", "Expected 'in' after 'not'");
@@ -967,10 +988,12 @@ export class Parser {
     return this.advance().value;
   }
 
+  // True if the next token's value matches any of the given strings.
   private matchAhead(...values: string[]): boolean {
     return values.includes(this.peek().value);
   }
 
+  // Accept and discard an end-of-line, `}` or EOF after a statement.
   private consumeLineEnd(): void {
     if (this.matchKind("newline")) {
       this.skipNewlines();
@@ -979,35 +1002,42 @@ export class Parser {
     if (!this.check("}") && !this.checkKind("eof")) throw this.error("Expected end of statement");
   }
 
+  // Skip any run of newline tokens.
   private skipNewlines(): void {
     while (this.matchKind("newline")) {}
   }
 
+  // Keyword-aware helpers: keywords are identifiers with reserved values.
   private checkKeyword(value: string): boolean {
     return this.peek().kind === "identifier" && this.peek().value === value;
   }
 
+  // If the next token is the given keyword, consume it and return true.
   private matchKeyword(value: string): boolean {
     if (!this.checkKeyword(value)) return false;
     this.advance();
     return true;
   }
 
+  // Consume the given keyword or fail with `message`.
   private consumeKeyword(value: string, message: string): Token {
     if (this.checkKeyword(value)) return this.advance();
     throw this.error(message);
   }
 
+  // Consume an identifier or fail with `message`.
   private consumeIdentifier(message: string): Token {
     if (this.checkKind("identifier")) return this.advance();
     throw this.error(message);
   }
 
+  // Generic token-value helpers: consume/match/check by literal value.
   private consume(value: string, message: string): Token {
     if (this.check(value)) return this.advance();
     throw this.error(message);
   }
 
+  // If the next token matches any given value, consume it and return true.
   private match(...values: string[]): boolean {
     if (values.some((value) => this.check(value))) {
       this.advance();
@@ -1016,12 +1046,14 @@ export class Parser {
     return false;
   }
 
+  // Match a token purely by its kind (identifier, newline, eof, ...).
   private matchKind(kind: Token["kind"]): boolean {
     if (!this.checkKind(kind)) return false;
     this.advance();
     return true;
   }
 
+  // Peek-and-compare by value without consuming.
   private check(value: string): boolean {
     const token = this.peek();
     // String literals such as "*" or ")" must never match operators or keywords.
@@ -1051,6 +1083,7 @@ export class Parser {
   }
 
   /** Whether any direct (non-nested-function) statement in the block yields. */
+  // Detect whether a block body contains `yield` (needed to mark generators).
   private blockContainsYield(statements: Statement[]): boolean {
     for (const statement of statements) {
       if (this.statementContainsYield(statement)) return true;
@@ -1099,6 +1132,8 @@ export class Parser {
     }
   }
 
+  // Recursively determine whether an expression contains a `yield`.
+  // Lambdas introduce a new function scope, so they stop the search.
   private expressionContainsYield(expression: Expr): boolean {
     switch (expression.kind) {
       case "yield":
@@ -1150,10 +1185,12 @@ export class Parser {
   }
 }
 
+/** Parse a complete source module into a Program AST. */
 export function parse(source: string): Program {
   return new Parser(tokenize(source)).parseProgram();
 }
 
+/** Parse source containing exactly one expression (used by tooling/tests). */
 export function parseExpression(source: string): Expr {
   return new Parser(tokenize(source)).parseExpressionOnly();
 }

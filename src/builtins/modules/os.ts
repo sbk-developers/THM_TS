@@ -1,10 +1,19 @@
-import { ThmTypeError,ThmOSError } from "../../errors/errors.js";
+/**
+ * builtins/modules/os.ts
+ * ---------------------------------------------------------------------------
+ * `os` built-in module: filesystem queries (getcwd, exists, isdir, listdir,
+ * join), process execution (system) and host info (platform, arch, version,
+ * cpus).
+ */
+
+import { ThmTypeError, ThmOSError } from "../../errors/errors.js";
 import type { NativeCallback } from "../../runtime/values.js";
 import { makeList } from "../../runtime/values.js";
 import { registerBuiltinModule } from "../registry.js";
-import {execSync} from  "node:child_process"
-import os from "node:os"
+import { execSync } from "node:child_process";
+import os from "node:os";
 
+/** Require between min and max string arguments; returns them as paths. */
 function requirePathArguments(
   args: unknown[],
   functionName: string,
@@ -52,47 +61,49 @@ const join: NativeCallback = (vm, _receiver, args) => {
 };
 
 const system: NativeCallback = (_vm, _re, args) => {
+  // SECURITY: os.system() executes an arbitrary shell command with full
+  // process privileges. Never run untrusted THM code with this module loaded.
+  if (args.length !== 1) throw new ThmTypeError("system() takes exactly one argument");
+  if (typeof args[0] !== "string") throw new ThmTypeError("system() argument must be a string");
   try {
-    return String(execSync(String(args[0]))).trim()
+    return String(execSync(args[0])).trim();
   } catch (error) {
     if (error instanceof Error) {
-      throw new ThmOSError(error.message)
+      throw new ThmOSError(error.message);
     } else {
-      throw new ThmOSError(String(error))
+      throw new ThmOSError(String(error));
     }
   }
-}
+};
 
-const platform:NativeCallback = (_vm,_rs,args)=>{
-  const plt = os.platform()
-
+const platform: NativeCallback = (_vm, _rs, args) => {
+  if (args.length !== 0) throw new ThmTypeError("platform() takes no arguments");
+  const plt = os.platform();
   switch (plt) {
-    case "win32":
-      return "Windows"
-    case "linux":
-      return "Linux"
-    case "freebsd":
-      return "FreeBSD"
-    case "openbsd":
-      return "OpenBSD"
-    case "darwin":
-      return "MacOs"
-    default :
-      return "Unknown"
-    
+    case "win32": return "Windows";
+    case "linux": return "Linux";
+    case "freebsd": return "FreeBSD";
+    case "openbsd": return "OpenBSD";
+    case "darwin": return "MacOs";
+    default: return "Unknown";
   }
-}
+};
 
-const arch:NativeCallback = (_vm,_rs,args) => {
-  return os.arch()
-}
-const version:NativeCallback = (_vm,rs,args)=>{
-  return os.release()
-}
-const cpus:NativeCallback = (_vm,_rs,args)=>{
-  return os.cpus()[0]?.model
-}
+const arch: NativeCallback = (_vm, _rs, args) => {
+  if (args.length !== 0) throw new ThmTypeError("arch() takes no arguments");
+  return os.arch();
+};
+
+const version: NativeCallback = (_vm, _rs, args) => {
+  if (args.length !== 0) throw new ThmTypeError("version() takes no arguments");
+  return os.release();
+};
+
+const cpus: NativeCallback = (_vm, _rs, args) => {
+  if (args.length !== 0) throw new ThmTypeError("cpus() takes no arguments");
+  return os.cpus()[0]?.model;
+};
 
 registerBuiltinModule("os", {
-  functions: { getcwd, exists, isdir, listdir, join ,system,platform,arch,version,cpus},
+  functions: { getcwd, exists, isdir, listdir, join, system, platform, arch, version, cpus },
 });

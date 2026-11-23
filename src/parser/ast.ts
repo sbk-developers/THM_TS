@@ -1,5 +1,16 @@
+/**
+ * parser/ast.ts
+ * ---------------------------------------------------------------------------
+ * Abstract Syntax Tree (AST) node definitions for THM.
+ *
+ * Nodes are plain discriminated unions tagged with `kind`; every node also
+ * carries `line` and `column` so errors can point at exact source locations.
+ * The parser produces these; the compiler consumes them.
+
+/** Literal values allowed in AST literal nodes. */
 export type LiteralValue = null | boolean | bigint | number | string;
 
+/** All expression node variants. */
 export type Expr =
   | { kind: "literal"; value: LiteralValue; line: number; column: number }
   | { kind: "bytes"; value: string; line: number; column: number }
@@ -22,6 +33,7 @@ export type Expr =
   | { kind: "fstring"; parts: Array<string | Expr>; line: number; column: number }
   | { kind: "comprehension"; container: "list" | "set" | "dict" | "generator"; element?: Expr; key?: Expr; clauses: Array<{ target: Expr; iterable: Expr; filters: Expr[]; isAsync: boolean }>; line: number; column: number };
 
+/** One function parameter: name plus optional default/keyword-only flags. */
 export interface Parameter {
   name: string;
   kind: "positional" | "vararg" | "keywordOnly" | "kwarg";
@@ -29,12 +41,14 @@ export interface Parameter {
   defaultValue?: Expr;
 }
 
+/** One call argument: positional, keyword (named), or star-expanded. */
 export interface CallArgument {
   kind: "positional" | "keyword" | "star" | "keywordStar";
   value: Expr;
   name?: string;
 }
 
+/** All statement node variants. */
 export type Statement =
   | { kind: "expression"; expression: Expr; line: number; column: number }
   | { kind: "assign"; targets: Expr[]; value: Expr; line: number; column: number }
@@ -58,6 +72,7 @@ export type Statement =
   | { kind: "import"; module: string; alias?: string; line: number; column: number }
   | { kind: "fromImport"; module: string; names: Array<{ name: string; alias?: string }>; line: number; column: number };
 
+/** A parsed program: the list of top-level statements. */
 export interface Program {
   statements: Statement[];
 }

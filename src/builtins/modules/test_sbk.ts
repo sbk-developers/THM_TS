@@ -1,3 +1,10 @@
+/**
+ * builtins/modules/test_sbk.ts
+ * ---------------------------------------------------------------------------
+ * `test_sbk` built-in module: a minimal example module (author constant and
+ * a greet() function) that demonstrates how native modules are registered.
+ */
+
 import { ThmTypeError } from "../../errors/errors.js";
 import { registerBuiltinModule } from "../registry.js";
 

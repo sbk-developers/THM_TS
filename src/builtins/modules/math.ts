@@ -1,13 +1,22 @@
+/**
+ * builtins/modules/math.ts
+ * ---------------------------------------------------------------------------
+ * `math` built-in module: constants (pi, e, tau) and functions (sqrt,
+ * floor, ceil, sin, cos, ...).
+ */
+
 import { ThmTypeError, ThmValueError } from "../../errors/errors.js";
 import type { NativeCallback, Value } from "../../runtime/values.js";
 import { registerBuiltinModule } from "../registry.js";
 
+/** Coerce a value to a JS number; TypeError if not numeric. */
 function toNumber(value: Value, functionName: string): number {
   if (typeof value === "number") return value;
   if (typeof value === "bigint") return Number(value);
   throw new ThmTypeError(`${functionName}() argument must be a real number`);
 }
 
+/** Build a one-argument math function with an optional domain validator. */
 function unaryMath(
   functionName: string,
   operation: (value: number) => number,

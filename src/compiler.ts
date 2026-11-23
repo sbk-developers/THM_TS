@@ -1,3 +1,21 @@
+/**
+ * compiler.ts
+ * ---------------------------------------------------------------------------
+ * THM compiler: AST -> bytecode.
+ *
+ * Walks the AST produced by the parser, runs scope analysis for each
+ * function/class/module body, and emits a validated bytecode Chunk per body
+ * (module, function, class, generator, lambda).
+ *
+ * Design notes:
+ *   - ChunkCompiler compiles ONE scope; nested scopes create nested Chunks.
+ *   - break/continue targets are tracked with a loop-context stack.
+ *   - try/finally bodies are queued as pending finalizers and emitted at
+ *     every exit path of the protected region (return, break, exception).
+ *   - The finished Chunk is run through validateChunk() before being returned,
+ *     so invalid jumps/stack effects never reach the VM.
+ */
+
 import type { Expr, Program, Statement } from "./parser/ast.js";
 import { CompileError, SyntaxError } from "./errors/errors.js";
 import {
@@ -9,6 +27,7 @@ import {
 } from "./compiler/bytecode/bytecode.js";
 import { analyzeScope } from "./semantic-analyzer/analyzer.js";
 
+/** Loop bookkeeping for break/continue: jump targets and finalizer depth. */
 interface LoopContext {
   continueTarget: number;
   breaks: number[];
@@ -16,8 +35,11 @@ interface LoopContext {
   finalizerDepth: number;
 }
 
+/** A try/finally finalizer body waiting to be emitted on every exit path. */
 type Finalizer = { body: Statement[]; source: Statement };
 
+/** Compiles one scope (module, function, class body, generator, lambda)
+ *  into a self-contained bytecode Chunk. */
 class ChunkCompiler {
   private readonly code: Instruction[] = [];
   private comprehensionCounter = 0;
@@ -47,6 +69,7 @@ class ChunkCompiler {
     this.localNames = isFunction ? new Set(parameters) : new Set();
   }
 
+  /** Run scope analysis, compile all statements, and validate the chunk. */
   compile(statements: Statement[]): Chunk {
     const scope = analyzeScope(statements, {
       isFunction: this.isFunction,
@@ -81,16 +104,16 @@ class ChunkCompiler {
       localNames: [...this.localNames].sort(),
       exceptions: this.exceptions,
     };
-    // debug: validateChunk(chunk);
+    validateChunk(chunk);
     return chunk;
   }
 
+  /** Route one statement to its specialized compile method. */
   private compileStatement(statement: Statement): void {
     switch (statement.kind) {
       case "expression":
         if (statement.expression.kind === "yield" && this.isGenerator) {
-          // Bare yield statement: compile inside the function so YIELD's
-          // suspend/resume contract keeps the operand stack balanced.
+          // Bare yield statement inside a generator.
           this.compileExpression(statement.expression);
           return;
         }
@@ -203,6 +226,7 @@ class ChunkCompiler {
     }
   }
 
+  /** Compile a class statement: base classes, body methods, MAKE_CLASS. */
   private compileClass(statement: Extract<Statement, { kind: "class" }>): void {
     if (statement.metaclass === undefined) {
       this.emit("CONST", this.constant(null), undefined, statement);
@@ -222,6 +246,7 @@ class ChunkCompiler {
     this.emit("STORE", this.nameIndex(statement.name), this.storeMode(statement.name), statement);
   }
 
+  /** Compile a try statement: handler table entry, except/else branches and finally. */
   private compileTry(statement: Extract<Statement, { kind: "try" }>): void {
     const hasFinally = statement.finalBody.length > 0;
     const finalizer: Finalizer | undefined = hasFinally
@@ -305,6 +330,7 @@ class ChunkCompiler {
     for (const jump of normalExits) this.patch(jump, end);
   }
 
+  /** Create an exception-table entry covering [start,end) with handler metadata. */
   private exceptionEntry(
     start: number,
     end: number,
@@ -323,12 +349,14 @@ class ChunkCompiler {
     };
   }
 
+  /** Patch an exception handler entry to point at `handler` once known. */
   private patchExceptionHandler(index: number, handler: number): void {
     const entry = this.exceptions[index];
     if (entry === undefined) throw new CompileError("Invalid compiler exception handler");
     entry.handler = handler;
   }
 
+  /** Emit one finalizer body, restoring the operand stack depth afterwards. */
   private compileFinalizerBody(finalizer: Finalizer, outerDepth: number): void {
     const currentDepth = this.finalizers.length;
     this.finalizers.length = outerDepth;
@@ -339,12 +367,14 @@ class ChunkCompiler {
     }
   }
 
+  /** Emit pending finalizers from the top of the stack down to `depth` (on exits). */
   private compileFinalizersFrom(depth: number): void {
     for (let index = this.finalizers.length - 1; index >= depth; index--) {
       this.compileFinalizerBody(this.finalizers[index]!, index);
     }
   }
 
+  /** Compile a function statement: nested chunk, defaults, decorators and MAKE_FUNCTION. */
   private compileFunction(statement: Extract<Statement, { kind: "function" }>): void {
     const visible = new Set([...this.enclosingNames, ...this.localNames]);
     const childCompiler = new ChunkCompiler(
@@ -381,17 +411,18 @@ class ChunkCompiler {
     this.emit("STORE", this.nameIndex(statement.name), this.storeMode(statement.name), statement);
   }
 
-  /** Apply decorators from the bottom up: @a @b def f -> a(b(f)). */
+  /** Apply decorators bottom-up so @a @b def f compiles to a(b(f)). */
   private compileDecorators(decorators: Expr[], statement: Statement): void {
     for (let index = decorators.length - 1; index >= 0; index--) {
       this.compileExpression(decorators[index]!);
       // The decorated object is already on the stack. CALL expects the
-      // callable below its arguments, so exchange the two stack values.
+      // callable below its arguments, so swap the two stack values.
       this.emit("SWAP", undefined, undefined, statement);
       this.emit("CALL", 1, undefined, statement);
     }
   }
 
+  /** Compile an if/elif/else chain with short-circuit jumps. */
   private compileIf(statement: Extract<Statement, { kind: "if" }>): void {
     this.compileExpression(statement.condition);
     const falseJump = this.emit("JUMP_IF_FALSE", 0, undefined, statement);
@@ -406,6 +437,7 @@ class ChunkCompiler {
     this.patch(endJump, this.code.length);
   }
 
+  /** Compile a switch statement: equality tests chained by jumps plus an optional default. */
   private compileSwitch(statement: Extract<Statement, { kind: "switch" }>): void {
     this.compileExpression(statement.subject);
     const endJumps: number[] = [];
@@ -427,6 +459,7 @@ class ChunkCompiler {
     void defaultJumps;
   }
 
+  /** Compile a while loop with break/continue targeting the loop context. */
   private compileWhile(statement: Extract<Statement, { kind: "while" }>): void {
     const start = this.code.length;
     this.compileExpression(statement.condition);
@@ -442,6 +475,7 @@ class ChunkCompiler {
     for (const jump of loop.breaks) this.patch(jump, end);
   }
 
+  /** Compile a for loop: ITER/ITER_NEXT and per-iteration target assignment. */
   private compileFor(statement: Extract<Statement, { kind: "for" }>): void {
     if (statement.isAsync) throw new CompileError("async for is not supported", statement.line, statement.column);
     this.compileExpression(statement.iterable);
@@ -460,6 +494,7 @@ class ChunkCompiler {
     for (const jump of loop.breaks) this.patch(jump, end);
   }
 
+  /** Compile an augmented assignment, reusing the loaded value to avoid double evaluation. */
   private compileAugmentedAssignment(statement: Extract<Statement, { kind: "augmentedAssign" }>): void {
     const { target } = statement;
     if (target.kind === "name") {
@@ -491,6 +526,7 @@ class ChunkCompiler {
     throw new SyntaxError("Invalid augmented assignment target", target);
   }
 
+  /** Compile a delete target (name, attribute, index or slice). */
   private compileDeleteTarget(target: Expr, source: { line: number; column: number }): void {
     switch (target.kind) {
       case "name":
@@ -521,6 +557,7 @@ class ChunkCompiler {
     }
   }
 
+  /** Compile an assignment target: name, tuple unpack, attribute, index or slice store. */
   private compileStoreTarget(target: Expr, source: { line: number; column: number }): void {
     switch (target.kind) {
       case "name": {
@@ -548,8 +585,7 @@ class ChunkCompiler {
         this.emit("SET_ITEM", undefined, undefined, target);
         return;
       case "slice":
-        // Stack: value. Build receiver,start,stop,step above it, then SET_SLICE pops all five
-        // with the assigned value deepest (SET_SLICE reads it from below the slice operands).
+        // Stack: value. Build receiver,start,stop,step above it, then SET_SLICE pops all five.
         this.compileExpression(target.receiver);
         this.compileOptional(target.start, target);
         this.compileOptional(target.stop, target);
@@ -561,6 +597,7 @@ class ChunkCompiler {
     }
   }
 
+  /** Compile an expression, leaving its value on the operand stack. */
   private compileExpression(expression: Expr): void {
     switch (expression.kind) {
       case "literal":
@@ -674,9 +711,10 @@ class ChunkCompiler {
     }
   }
 
+  /** Compile list/set/dict comprehensions and lazy generator comprehensions. */
   private compileComprehension(expression: Extract<Expr, { kind: "comprehension" }>): void {
     if (expression.container === "generator") {
-      // Lazy generator: compile the clauses into a nested generator function
+      // Lazy generator: compile clauses into a nested generator function
       // with a single element-yield body, then call it with no arguments.
       const statements: Statement[] = [];
       const buildClauses = (index: number): Statement[] => {
@@ -770,12 +808,14 @@ class ChunkCompiler {
     this.emit("LOAD", this.nameIndex(tempName), this.loadMode(tempName), expression);
   }
 
+  /** Collect bound names from a for/comprehension target (names or tuple pattern). */
   private targetNames(target: Expr): string[] {
     if (target.kind === "name") return [target.name];
     if (target.kind === "tuple" || target.kind === "list") return target.items.flatMap((item) => this.targetNames(item));
     return [];
   }
 
+  /** Compile a lambda as a parameterless-default nested function chunk. */
   private compileLambda(expression: Extract<Expr, { kind: "lambda" }>): void {
     const visible = new Set([...this.enclosingNames, ...this.localNames]);
     const childCompiler = new ChunkCompiler(
@@ -803,6 +843,7 @@ class ChunkCompiler {
     }), expression);
   }
 
+  /** Compile `and`/`or` with short-circuit jumps; other operators emit BINARY. */
   private compileBinary(expression: Extract<Expr, { kind: "binary" }>): void {
     if (expression.operator === "and" || expression.operator === "or") {
       this.compileExpression(expression.left);
@@ -823,11 +864,13 @@ class ChunkCompiler {
     this.emit("BINARY", undefined, expression.operator, expression);
   }
 
+  /** Compile an optional slice bound; absent bounds become a null constant. */
   private compileOptional(expression: Expr | undefined, source: { line: number; column: number }): void {
     if (expression === undefined) this.emit("CONST", this.constant(null), undefined, source);
     else this.compileExpression(expression);
   }
 
+  /** Decide how a name is loaded: global, nonlocal, local or closure cell. */
   private loadMode(name: string): string {
     if (!this.isFunction || this.globalNames.has(name)) return "global";
     if (this.nonlocalNames.has(name)) return "nonlocal";
@@ -835,12 +878,14 @@ class ChunkCompiler {
     return this.capturedNames.has(name) ? "closure" : "global";
   }
 
+  /** Decide how a name is stored: global, nonlocal or local. */
   private storeMode(name: string): string {
     if (!this.isFunction || this.globalNames.has(name)) return "global";
     if (this.nonlocalNames.has(name)) return "nonlocal";
     return "local";
   }
 
+  /** Intern a constant in the chunk's constant pool and return its index. */
   private constant(value: Chunk["constants"][number]): number {
     const existing = this.constants.findIndex((candidate) => {
       if (Array.isArray(candidate) && Array.isArray(value)) {
@@ -853,6 +898,7 @@ class ChunkCompiler {
     return this.constants.length - 1;
   }
 
+  /** Intern a name string in the chunk's name table and return its index. */
   private nameIndex(value: string): number {
     const existing = this.names.indexOf(value);
     if (existing >= 0) return existing;
@@ -860,6 +906,7 @@ class ChunkCompiler {
     return this.names.length - 1;
   }
 
+  /** Emit one instruction with source location and return its index. */
   private emit(op: Opcode, a: number | undefined, text: string | undefined, source: { line: number; column: number }): number {
     const instruction: Instruction = { op, line: source.line, column: source.column };
     if (a !== undefined) instruction.a = a;
@@ -868,16 +915,19 @@ class ChunkCompiler {
     return this.code.length - 1;
   }
 
+  /** Patch a previously emitted jump to point at `destination`. */
   private patch(index: number, destination: number): void {
     this.code[index]!.a = destination;
   }
 
+  /** Source location of the most recently emitted instruction. */
   private lastLocation(): { line: number; column: number } {
     const instruction = this.code[this.code.length - 1];
     return instruction === undefined ? { line: 1, column: 1 } : { line: instruction.line, column: instruction.column };
   }
 }
 
+// Describe an assignment target for annotations.
 function describeTarget(target: Expr): string {
   if (target.kind === "name") return target.name;
   if (target.kind === "attribute") return `${describeTarget(target.receiver)}.${target.name}`;
@@ -885,6 +935,8 @@ function describeTarget(target: Expr): string {
   return "<target>";
 }
 
+// Compile a Program into a module Chunk.
+/** Top-level entry: compile a whole Program into a validated module chunk. */
 export function compile(program: Program, sourceFile = "<stdin>"): Chunk {
   return new ChunkCompiler("<module>", sourceFile, false, [], [], new Set(), true).compile(program.statements);
 }

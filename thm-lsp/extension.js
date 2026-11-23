@@ -7,7 +7,7 @@ const vscode_1 = require("vscode");
 const node_1 = require("vscode-languageclient/node");
 let client;
 function activate(context) {
-    const serverModule = context.asAbsolutePath(path.join("server", "out", "cli.js"));
+    const serverModule = context.asAbsolutePath(path.join("out", "cli.js"));
     const serverOptions = {
         run: { module: serverModule, transport: node_1.TransportKind.stdio },
         debug: { module: serverModule, transport: node_1.TransportKind.stdio },
